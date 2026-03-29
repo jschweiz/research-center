@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "research-center-backend"
+version = "0.1.0"
+description = "Backend and worker for the Research Center MVP."
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.14.1",
+  "beautifulsoup4>=4.12.3",
+  "celery[redis]>=5.4.0",
+  "cryptography>=44.0.1",
+  "email-validator>=2.2.0",
+  "fastapi>=0.115.12",
+  "feedparser>=6.0.11",
+  "httpx>=0.28.1",
+  "itsdangerous>=2.2.0",
+  "orjson>=3.10.16",
+  "pgvector>=0.3.6",
+  "psycopg[binary]>=3.2.6",
+  "pydantic-settings>=2.8.1",
+  "python-dateutil>=2.9.0.post0",
+  "python-multipart>=0.0.20",
+  "sentry-sdk[fastapi]>=2.25.1",
+  "SQLAlchemy>=2.0.39",
+  "tenacity>=9.0.0",
+  "trafilatura>=2.0.0",
+  "uvicorn[standard]>=0.34.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "anyio>=4.8.0",
+  "pytest>=8.3.5",
+  "pytest-asyncio>=0.26.0",
+  "pytest-cov>=6.0.0",
+  "ruff>=0.11.2",
+]
+embeddings = [
+  "sentence-transformers>=3.4.1",
+]
+
+[tool.setuptools]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["app/tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+ignore = ["E501"]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "C4"]
+
+[tool.ruff.lint.per-file-ignores]
+"app/api/**/*.py" = ["B008"]
+"app/api/deps.py" = ["B008"]
+
+[tool.ruff.format]
+quote-style = "double"
