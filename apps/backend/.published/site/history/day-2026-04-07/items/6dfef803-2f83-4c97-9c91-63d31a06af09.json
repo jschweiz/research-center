@@ -1,0 +1,55 @@
+{
+  "also_mentioned_in": [],
+  "authors": [
+    "Research Center"
+  ],
+  "canonical_url": "https://example.com/publishing-test-item",
+  "cleaned_text": "A compact article used to verify local publication and pairing flows.",
+  "content_type": "article",
+  "extraction_confidence": 0.93,
+  "id": "6dfef803-2f83-4c97-9c91-63d31a06af09",
+  "insight": {
+    "caveats": "This is synthetic fixture data.",
+    "contribution": null,
+    "deeper_summary": null,
+    "experiment_ideas": [],
+    "follow_up_questions": [
+      "Did the publish operation strip private fields?"
+    ],
+    "limitation": null,
+    "method": null,
+    "possible_extension": null,
+    "result": null,
+    "short_summary": "A concise summary for publication tests.",
+    "whats_new": "The app now publishes a curated snapshot.",
+    "why_it_matters": "proves, published manifest, stays read-only"
+  },
+  "organization_name": "Example Labs",
+  "outbound_links": [
+    "https://example.com/related"
+  ],
+  "published_at": "2026-04-07T02:39:17.685646",
+  "score": {
+    "author_match_score": 0.0,
+    "bucket": "worth_a_skim",
+    "novelty_score": 0.8,
+    "reason_trace": {
+      "author_matches": 0,
+      "cluster_size": 1,
+      "favorite_source_match": false,
+      "heuristic_relevance_score": 0.9167,
+      "ignored_penalty": 0,
+      "recency_hours": 6.0,
+      "scoring_mode": "heuristic",
+      "source_priority": 80,
+      "topic_matches": 0
+    },
+    "relevance_score": 0.9167,
+    "source_quality_score": 0.8,
+    "topic_match_score": 0.0,
+    "total_score": 0.515,
+    "zotero_affinity_score": 0.0
+  },
+  "source_name": "Publishing Feed",
+  "title": "Signal from the publishing test feed"
+}

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.researchcenter.jobs.digest</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REPO_ROOT__/apps/backend/.venv/bin/python</string>
+    <string>-m</string>
+    <string>app.tasks.jobs</string>
+    <string>run-digest-inline</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__REPO_ROOT__/apps/backend</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>900</integer>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/jobs.digest.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/jobs.digest.stderr.log</string>
+</dict>
+</plist>

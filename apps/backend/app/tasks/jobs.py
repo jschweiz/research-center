@@ -1,325 +1,247 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
-from contextlib import suppress
-from datetime import date, time
-
-from celery import current_task
+from datetime import date
 
 from app.core.logging import bind_task_context, reset_task_context
 from app.core.metrics import track_task_metrics
-from app.db.models import ConnectionProvider, IngestionRun, IngestionRunType, RunStatus, Source
 from app.db.session import get_session_factory
-from app.services.backups import DatabaseBackupService
-from app.services.briefs import BriefService
-from app.services.connections import ConnectionService
+from app.schemas.advanced_enrichment import AdvancedOutputKind, HealthCheckScope
 from app.services.ingestion import IngestionService
-from app.services.item_enrichment import ItemEnrichmentService
-from app.services.items import ItemService
-from app.services.operations import OperationService
+from app.services.local_control import LocalControlService
 from app.services.scheduling import ScheduleService
-from app.tasks.celery_app import celery_app
+from app.services.vault_advanced_enrichment import VaultAdvancedEnrichmentService
+from app.services.vault_briefs import VaultBriefService
+from app.services.vault_export import VaultExporter
+from app.services.vault_git_sync import VaultGitSyncService
+from app.services.vault_ingestion import VaultIngestionService
+from app.services.vault_lightweight_enrichment import VaultLightweightEnrichmentService
+from app.services.vault_operations import VaultOperationService
+from app.services.vault_publishing import VaultPublisherService
+from app.services.vault_sources import VaultSourceIngestionService
 
 logger = logging.getLogger(__name__)
 
 
 def _task_metadata(default_name: str) -> tuple[str | None, str, tuple]:
-    task = None
     task_id = None
     task_name = default_name
-    with suppress(Exception):
-        task = current_task
-        request = getattr(task, "request", None)
-        task_id = getattr(request, "id", None)
-        task_name = getattr(task, "name", None) or default_name
     return task_id, task_name, bind_task_context(task_id=task_id, task_name=task_name)
 
 
-@celery_app.task(name="research_center.run_ingest")
 def run_ingest_task(source_id: str | None = None, cycle_run_id: str | None = None) -> int:
     _, task_name, task_tokens = _task_metadata("research_center.run_ingest")
     try:
-        with track_task_metrics(task_name) as set_task_outcome:
-            logger.info(
-                "task.ingest.started",
-                extra={"source_id": source_id, "cycle_run_id": cycle_run_id},
+        with track_task_metrics(task_name):
+            del cycle_run_id
+            sync = VaultGitSyncService()
+            sync.prepare_for_mutation()
+            source_service = VaultSourceIngestionService()
+            if source_id:
+                source_service.sync_source_by_id(source_id, trigger="cli_ingest")
+            else:
+                source_service.sync_enabled_sources(trigger="cli_ingest")
+            VaultLightweightEnrichmentService().enrich_stale_documents(
+                trigger="cli_ingest",
+                source_id=source_id,
             )
-            with get_session_factory()() as db:
-                service = IngestionService(db)
-                brief_service = BriefService(db)
-                enrichment_service = ItemEnrichmentService(db)
-                try:
-                    if source_id:
-                        source = db.get(Source, source_id)
-                        if source:
-                            (
-                                ingested,
-                                affected_edition_days,
-                            ) = service.run_source_with_affected_edition_days(source)
-                            enrichment_service.enrich_item_ids(
-                                service.drain_changed_item_ids(),
-                                trigger="post_ingest",
-                            )
-                            if affected_edition_days:
-                                brief_service.refresh_current_edition_day(trigger="ingest_refresh")
-                            logger.info(
-                                "task.ingest.completed",
-                                extra={
-                                    "source_id": source_id,
-                                    "cycle_run_id": cycle_run_id,
-                                    "ingested_count": ingested,
-                                    "affected_edition_days": sorted(
-                                        day.isoformat() for day in affected_edition_days
-                                    ),
-                                },
-                            )
-                            return ingested
-                        set_task_outcome("skipped")
-                        logger.warning("task.ingest.source_missing", extra={"source_id": source_id})
-                        return 0
-                    ingested, affected_edition_days = (
-                        service.run_all_sources_with_affected_edition_days(
-                            cycle_run_id=cycle_run_id
-                        )
-                    )
-                    enrichment_service.enrich_item_ids(
-                        service.drain_changed_item_ids(),
-                        trigger="post_ingest",
-                    )
-                    if cycle_run_id:
-                        if affected_edition_days:
-                            current_edition_day = brief_service.current_edition_date()
-                            service.append_operation_log(
-                                cycle_run_id,
-                                message=(
-                                    "Refreshing current edition only: "
-                                    f"{current_edition_day.isoformat()}."
-                                ),
-                            )
-                        else:
-                            service.append_operation_log(
-                                cycle_run_id,
-                                message="No edition refresh needed after ingest.",
-                            )
-                    if affected_edition_days:
-                        brief_service.refresh_current_edition_day(trigger="ingest_refresh")
-                    if cycle_run_id and affected_edition_days:
-                        service.append_operation_log(
-                            cycle_run_id,
-                            message="Current edition refresh finished.",
-                            level="success",
-                        )
-                    logger.info(
-                        "task.ingest.completed",
-                        extra={
-                            "cycle_run_id": cycle_run_id,
-                            "ingested_count": ingested,
-                            "affected_edition_days": sorted(
-                                day.isoformat() for day in affected_edition_days
-                            ),
-                        },
-                    )
-                    return ingested
-                except Exception as exc:
-                    if cycle_run_id:
-                        service.fail_ingest_cycle_run(
-                            cycle_run_id,
-                            error=str(exc),
-                            message="Ingest worker failed.",
-                        )
-                    logger.exception(
-                        "task.ingest.failed",
-                        extra={"source_id": source_id, "cycle_run_id": cycle_run_id},
-                    )
-                    raise
+            index = VaultIngestionService().rebuild_items_index(trigger="cli_ingest")
+            sync.push_local_control_changes(message="Run staged ingest pipeline")
+            return len(index.items)
     finally:
         reset_task_context(task_tokens)
 
 
-@celery_app.task(name="research_center.run_digest")
-def run_digest_task(
+def fetch_sources_task(source_id: str | None = None) -> dict[str, object]:
+    _, task_name, task_tokens = _task_metadata("research_center.fetch_sources")
+    try:
+        with track_task_metrics(task_name):
+            sync = VaultGitSyncService()
+            sync.prepare_for_mutation()
+            source_service = VaultSourceIngestionService()
+            if source_id:
+                run = source_service.sync_source_by_id(source_id, trigger="cli_fetch")
+                sync.push_local_control_changes(message=f"Fetch source {source_id}")
+                return {
+                    "source_id": source_id,
+                    "operation_run_id": run.id,
+                    "status": run.status.value,
+                    "synced_documents": run.total_titles,
+                    "created_count": run.created_count,
+                    "updated_count": run.updated_count,
+                }
+            result = source_service.sync_enabled_sources(trigger="cli_fetch")
+            sync.push_local_control_changes(message="Fetch sources")
+            return {
+                "source_count": result.source_count,
+                "synced_documents": result.synced_document_count,
+                "failed_sources": result.failed_source_count,
+            }
+    finally:
+        reset_task_context(task_tokens)
+
+
+def lightweight_enrich_task(
+    *,
+    source_id: str | None = None,
+    doc_id: str | None = None,
     force: bool = False,
-    only_if_due: bool = False,
-    brief_date: str | None = None,
-    trigger: str | None = None,
-    editorial_note_mode: str | None = None,
-) -> str:
-    _, task_name, task_tokens = _task_metadata("research_center.run_digest")
+) -> dict[str, object]:
+    _, task_name, task_tokens = _task_metadata("research_center.lightweight_enrich")
     try:
-        with track_task_metrics(task_name) as set_task_outcome:
-            logger.info(
-                "task.digest.started",
-                extra={
-                    "force": force,
-                    "only_if_due": only_if_due,
-                    "brief_date": brief_date,
-                    "trigger": trigger,
-                },
+        with track_task_metrics(task_name):
+            sync = VaultGitSyncService()
+            sync.prepare_for_mutation()
+            run = VaultLightweightEnrichmentService().enrich_stale_documents(
+                trigger="cli_lightweight_enrich",
+                source_id=source_id,
+                doc_id=doc_id,
+                force=force,
             )
-            with get_session_factory()() as db:
-                schedule_service = ScheduleService(db)
-                target_date = (
-                    date.fromisoformat(brief_date)
-                    if brief_date
-                    else schedule_service.current_profile_date()
-                )
-                if (
-                    only_if_due
-                    and not force
-                    and brief_date is None
-                    and not schedule_service.is_profile_digest_due()
-                ):
-                    set_task_outcome("skipped")
-                    logger.info(
-                        "task.digest.skipped_not_due",
-                        extra={"target_date": target_date.isoformat()},
-                    )
-                    return "skipped:not_due"
-                resolved_trigger = trigger or (
-                    "morning_injection"
-                    if only_if_due and brief_date is None
-                    else "regenerate"
-                    if force
-                    else "generate"
-                )
-                digest = BriefService(db).generate_digest(
-                    target_date,
-                    force=force,
-                    trigger=resolved_trigger,
-                    editorial_note_mode=editorial_note_mode or "generate",
-                )
-                logger.info(
-                    "task.digest.completed",
-                    extra={
-                        "digest_id": digest.id,
-                        "target_date": target_date.isoformat(),
-                        "trigger": resolved_trigger,
-                    },
-                )
-                return digest.id
-    except Exception:
-        logger.exception(
-            "task.digest.failed",
-            extra={
-                "force": force,
-                "only_if_due": only_if_due,
-                "brief_date": brief_date,
-                "trigger": trigger,
-            },
-        )
-        raise
+            sync.push_local_control_changes(message="Run lightweight enrichment")
+            return {
+                "operation_run_id": run.id,
+                "status": run.status.value,
+                "documents": run.total_titles,
+                "updated_count": run.updated_count,
+                "failed_count": len(run.errors),
+            }
     finally:
         reset_task_context(task_tokens)
 
 
-@celery_app.task(name="research_center.run_enrich_all")
-def run_enrich_all_task(operation_run_id: str | None = None) -> int:
-    _, task_name, task_tokens = _task_metadata("research_center.run_enrich_all")
+def rebuild_items_index_task() -> dict[str, object]:
+    _, task_name, task_tokens = _task_metadata("research_center.rebuild_items_index")
     try:
         with track_task_metrics(task_name):
-            logger.info("task.enrich_all.started", extra={"operation_run_id": operation_run_id})
-            with get_session_factory()() as db:
-                enrichment_result = ItemEnrichmentService(db).enrich_all_items(
-                    trigger="manual_backfill",
-                    operation_run_id=operation_run_id,
-                )
-                if enrichment_result.updated_count:
-                    BriefService(db).refresh_current_edition_day(trigger="enrichment_refresh")
-                logger.info(
-                    "task.enrich_all.completed",
-                    extra={
-                        "operation_run_id": operation_run_id,
-                        "updated_count": enrichment_result.updated_count,
-                    },
-                )
-                return enrichment_result.updated_count
-    except Exception:
-        logger.exception("task.enrich_all.failed", extra={"operation_run_id": operation_run_id})
-        raise
+            sync = VaultGitSyncService()
+            sync.prepare_for_mutation()
+            index = VaultIngestionService().rebuild_items_index(trigger="cli_index")
+            sync.push_local_control_changes(message="Rebuild local DB indexes")
+            return {
+                "indexed_items": len(index.items),
+                "index_path": "sqlite:vault_items,vault_item_fts,vault_topics",
+            }
     finally:
         reset_task_context(task_tokens)
 
 
-@celery_app.task(name="research_center.run_zotero_sync")
-def run_zotero_sync_task(only_if_due: bool = False) -> int:
-    _, task_name, task_tokens = _task_metadata("research_center.run_zotero_sync")
-    try:
-        with track_task_metrics(task_name) as set_task_outcome:
-            logger.info("task.zotero_sync.started", extra={"only_if_due": only_if_due})
-            with get_session_factory()() as db:
-                if only_if_due:
-                    connection = ConnectionService(db).get_connection(ConnectionProvider.ZOTERO)
-                    if not connection:
-                        set_task_outcome("skipped")
-                        logger.info("task.zotero_sync.skipped_missing_connection")
-                        return 0
-                    schedule_service = ScheduleService(db)
-                    if not schedule_service.is_daily_job_due(
-                        last_run_at=connection.last_synced_at,
-                        due_time=time(hour=2, minute=0),
-                        timezone_name=schedule_service.settings.timezone,
-                    ):
-                        set_task_outcome("skipped")
-                        logger.info("task.zotero_sync.skipped_not_due")
-                        return 0
-                match_count = ItemService(db).sync_zotero_matches()
-                logger.info("task.zotero_sync.completed", extra={"match_count": match_count})
-                return match_count
-    except Exception:
-        logger.exception("task.zotero_sync.failed", extra={"only_if_due": only_if_due})
-        raise
-    finally:
-        reset_task_context(task_tokens)
-
-
-@celery_app.task(name="research_center.retry_failed_runs")
-def retry_failed_runs_task() -> int:
-    _, task_name, task_tokens = _task_metadata("research_center.retry_failed_runs")
+def advanced_compile_task(
+    *,
+    source_id: str | None = None,
+    doc_id: str | None = None,
+    limit: int | None = None,
+) -> dict[str, object]:
+    _, task_name, task_tokens = _task_metadata("research_center.advanced_compile")
     try:
         with track_task_metrics(task_name):
-            logger.info("task.retry_failed_runs.started")
-            with get_session_factory()() as db:
-                (
-                    ingested,
-                    affected_edition_days,
-                ) = IngestionService(db).retry_failed_runs_with_affected_edition_days()
-                if affected_edition_days:
-                    BriefService(db).refresh_current_edition_day(trigger="ingest_refresh")
-                logger.info(
-                    "task.retry_failed_runs.completed",
-                    extra={
-                        "ingested_count": ingested,
-                        "affected_edition_days": sorted(
-                            day.isoformat() for day in affected_edition_days
-                        ),
-                    },
-                )
-                return ingested
-    except Exception:
-        logger.exception("task.retry_failed_runs.failed")
-        raise
+            run = VaultOperationService().run_advanced_compile(
+                source_id=source_id,
+                doc_id=doc_id,
+                limit=limit,
+            )
+            return {
+                "operation_run_id": run.id,
+                "status": run.status.value,
+                "changed_file_count": run.changed_file_count,
+                "output_paths": run.output_paths,
+            }
     finally:
         reset_task_context(task_tokens)
 
 
-@celery_app.task(name="research_center.generate_deeper_summary")
-def generate_deeper_summary_task(item_id: str) -> None:
-    _, task_name, task_tokens = _task_metadata("research_center.generate_deeper_summary")
+def health_check_task(*, scope: HealthCheckScope = "vault", topic: str | None = None) -> dict[str, object]:
+    _, task_name, task_tokens = _task_metadata("research_center.health_check")
     try:
         with track_task_metrics(task_name):
-            logger.info("task.deeper_summary.started", extra={"item_id": item_id})
-            with get_session_factory()() as db:
-                IngestionService(db).generate_deeper_summary(item_id)
-            logger.info("task.deeper_summary.completed", extra={"item_id": item_id})
-    except Exception:
-        logger.exception("task.deeper_summary.failed", extra={"item_id": item_id})
-        raise
+            run = VaultOperationService().run_health_check(scope=scope, topic=topic)
+            return {
+                "operation_run_id": run.id,
+                "status": run.status.value,
+                "output_paths": run.output_paths,
+                "summary": run.summary,
+            }
     finally:
         reset_task_context(task_tokens)
 
 
-@celery_app.task(name="research_center.purge_raw_email_payloads")
+def answer_query_task(*, question: str, output_kind: AdvancedOutputKind = "answer") -> dict[str, object]:
+    _, task_name, task_tokens = _task_metadata("research_center.answer_query")
+    try:
+        with track_task_metrics(task_name):
+            run = VaultOperationService().run_answer_query(question=question, output_kind=output_kind)
+            return {
+                "operation_run_id": run.id,
+                "status": run.status.value,
+                "output_paths": run.output_paths,
+                "summary": run.summary,
+            }
+    finally:
+        reset_task_context(task_tokens)
+
+
+def file_output_task(*, path: str) -> dict[str, object]:
+    _, task_name, task_tokens = _task_metadata("research_center.file_output")
+    try:
+        with track_task_metrics(task_name):
+            run = VaultOperationService().run_file_output(path=path)
+            return {
+                "operation_run_id": run.id,
+                "status": run.status.value,
+                "changed_file_count": run.changed_file_count,
+                "summary": run.summary,
+            }
+    finally:
+        reset_task_context(task_tokens)
+
+
+def vault_search_task(*, query: str, limit: int = 10) -> dict[str, object]:
+    _, task_name, task_tokens = _task_metadata("research_center.vault_search")
+    try:
+        with track_task_metrics(task_name):
+            return VaultAdvancedEnrichmentService().search_vault(query=query, limit=limit)
+    finally:
+        reset_task_context(task_tokens)
+
+
+def vault_show_doc_task(*, doc_id: str) -> dict[str, object]:
+    _, task_name, task_tokens = _task_metadata("research_center.vault_show_doc")
+    try:
+        with track_task_metrics(task_name):
+            return VaultAdvancedEnrichmentService().show_raw_document(doc_id=doc_id)
+    finally:
+        reset_task_context(task_tokens)
+
+
+def vault_related_task(*, doc_id: str, limit: int = 10) -> dict[str, object]:
+    _, task_name, task_tokens = _task_metadata("research_center.vault_related")
+    try:
+        with track_task_metrics(task_name):
+            return VaultAdvancedEnrichmentService().related_documents(doc_id=doc_id, limit=limit)
+    finally:
+        reset_task_context(task_tokens)
+
+
+def vault_list_stale_task(*, source_id: str | None = None, limit: int | None = None) -> dict[str, object]:
+    _, task_name, task_tokens = _task_metadata("research_center.vault_list_stale")
+    try:
+        with track_task_metrics(task_name):
+            return VaultAdvancedEnrichmentService().list_stale_documents(source_id=source_id, limit=limit)
+    finally:
+        reset_task_context(task_tokens)
+
+
+def vault_insights_task(*, query: str | None = None, limit: int = 10) -> dict[str, object]:
+    _, task_name, task_tokens = _task_metadata("research_center.vault_insights")
+    try:
+        with track_task_metrics(task_name):
+            return VaultAdvancedEnrichmentService().insight_radar(query=query, limit=limit)
+    finally:
+        reset_task_context(task_tokens)
+
+
 def purge_raw_email_payloads_task() -> int:
     _, task_name, task_tokens = _task_metadata("research_center.purge_raw_email_payloads")
     try:
@@ -332,191 +254,352 @@ def purge_raw_email_payloads_task() -> int:
                 extra={"purged_count": purged_count},
             )
             return purged_count
-    except Exception:
-        logger.exception("task.raw_email_payload_purge.failed")
-        raise
     finally:
         reset_task_context(task_tokens)
 
 
-@celery_app.task(name="research_center.run_database_backup")
-def run_database_backup_task(
-    operation_run_id: str | None = None,
-    trigger: str = "manual_backup",
+def run_digest_task(
+    force: bool = False,
+    only_if_due: bool = False,
+    brief_date: str | None = None,
+    trigger: str | None = None,
+    editorial_note_mode: str | None = None,
 ) -> str:
-    _, task_name, task_tokens = _task_metadata("research_center.run_database_backup")
+    _, task_name, task_tokens = _task_metadata("research_center.run_digest")
     try:
-        with track_task_metrics(task_name), get_session_factory()() as db:
-            ingestion_service = IngestionService(db)
-            operation_run = db.get(IngestionRun, operation_run_id) if operation_run_id else None
-            resolved_trigger = trigger
-            if operation_run is not None:
-                metadata = (
-                    operation_run.metadata_json
-                    if isinstance(operation_run.metadata_json, dict)
-                    else {}
-                )
-                resolved_trigger = str(metadata.get("trigger") or trigger)
-            if operation_run is None:
-                operation_run = ingestion_service.start_operation_run(
-                    run_type=IngestionRunType.CLEANUP,
-                    operation_kind="database_backup",
-                    trigger=resolved_trigger,
-                    metadata={
-                        "title": "Database backup",
-                        "summary": "Database backup started.",
-                    },
-                )
-                operation_run_id = operation_run.id
-            logger.info(
-                "task.database_backup.started",
-                extra={
-                    "operation_run_id": operation_run_id,
-                    "trigger": resolved_trigger,
-                },
+        with track_task_metrics(task_name) as set_outcome:
+            if only_if_due:
+                with get_session_factory()() as db:
+                    if not ScheduleService(db).is_profile_digest_due():
+                        set_outcome("skipped")
+                        return "skipped:not_due"
+            sync = VaultGitSyncService()
+            sync.prepare_for_mutation()
+            service = VaultBriefService()
+            target_date = date.fromisoformat(brief_date) if brief_date else service.current_edition_date()
+            digest = service.generate_digest(
+                target_date,
+                force=bool(force or brief_date),
+                trigger=trigger or "cli_brief",
+                editorial_note_mode=editorial_note_mode,
             )
+            sync.push_local_control_changes(message=f"Generate brief for {target_date.isoformat()}")
+            return digest.id
+    finally:
+        reset_task_context(task_tokens)
 
-            ingestion_service.append_operation_log(
-                operation_run.id,
-                message="Starting database backup snapshot.",
-            )
-            result = DatabaseBackupService(db).create_backup()
-            ingestion_service.append_operation_log(
-                operation_run.id,
-                message=f"Created backup file {result.path.name}.",
-                level="success",
-            )
-            if result.pruned_files:
-                ingestion_service.append_operation_log(
-                    operation_run.id,
-                    message=(
-                        f"Pruned {len(result.pruned_files)} older backup "
-                        f"{'file' if len(result.pruned_files) == 1 else 'files'}."
-                    ),
-                    level="success",
-                )
-            summary = f"Created database backup {result.path.name}."
-            if result.pruned_files:
-                summary = (
-                    f"{summary[:-1]} and pruned {len(result.pruned_files)} older "
-                    f"{'snapshot' if len(result.pruned_files) == 1 else 'snapshots'}."
-                )
-            ingestion_service.finalize_operation_run(
-                operation_run,
-                status=RunStatus.SUCCEEDED,
-                metadata={
-                    "summary": summary,
-                    "backup_file": result.path.name,
-                    "backup_path": str(result.path),
-                    "backup_size_bytes": result.size_bytes,
-                    "backup_sha256": result.sha256,
-                    "backup_table_count": result.table_count,
-                    "backup_row_count": result.row_count,
-                    "backup_pruned_files": result.pruned_files,
-                    "alembic_version": result.alembic_version,
-                    "basic_info": [
-                        {"label": "File", "value": result.path.name},
-                        {"label": "Size", "value": f"{result.size_bytes} bytes"},
-                        {"label": "Rows", "value": str(result.row_count)},
-                        {"label": "Tables", "value": str(result.table_count)},
-                        {
-                            "label": "Pruned",
-                            "value": str(len(result.pruned_files)),
-                        },
-                    ],
-                },
-            )
-            logger.info(
-                "task.database_backup.completed",
-                extra={
-                    "operation_run_id": operation_run.id,
-                    "backup_file": result.path.name,
-                    "backup_size_bytes": result.size_bytes,
-                    "backup_sha256": result.sha256,
-                    "backup_pruned_count": len(result.pruned_files),
-                },
-            )
-            return result.path.name
-    except Exception as exc:
-        if operation_run_id:
-            with get_session_factory()() as db:
-                ingestion_service = IngestionService(db)
-                operation_run = db.get(IngestionRun, operation_run_id)
-                if operation_run is not None:
-                    ingestion_service.append_operation_log(
-                        operation_run.id,
-                        message="Database backup failed.",
-                        level="error",
-                    )
-                    ingestion_service.finalize_operation_run(
-                        operation_run,
-                        status=RunStatus.FAILED,
-                        metadata={
-                            "summary": "Database backup failed.",
-                        },
-                        error=str(exc),
-                    )
-        logger.exception(
-            "task.database_backup.failed",
-            extra={"operation_run_id": operation_run_id},
-        )
-        raise
+
+def generate_audio_task(brief_date: str | None = None) -> str:
+    _, task_name, task_tokens = _task_metadata("research_center.generate_audio")
+    try:
+        with track_task_metrics(task_name):
+            sync = VaultGitSyncService()
+            sync.prepare_for_mutation()
+            service = VaultBriefService()
+            target_date = date.fromisoformat(brief_date) if brief_date else service.current_edition_date()
+            audio = service.generate_audio_brief(target_date)
+            if audio is None:
+                raise RuntimeError(f"Audio brief generation returned nothing for {target_date.isoformat()}.")
+            sync.push_local_control_changes(message=f"Generate audio for {target_date.isoformat()}")
+            return audio.status
+    finally:
+        reset_task_context(task_tokens)
+
+
+def publish_latest_task() -> dict:
+    _, task_name, task_tokens = _task_metadata("research_center.publish_latest")
+    try:
+        with track_task_metrics(task_name):
+            sync = VaultGitSyncService()
+            sync.prepare_for_mutation()
+            summary = VaultPublisherService().publish_latest()
+            sync.push_local_control_changes(message="Publish latest viewer artifacts")
+            return summary.model_dump(mode="json")
+    finally:
+        reset_task_context(task_tokens)
+
+
+def publish_date_task(brief_date: str) -> dict:
+    _, task_name, task_tokens = _task_metadata("research_center.publish_date")
+    try:
+        with track_task_metrics(task_name):
+            sync = VaultGitSyncService()
+            sync.prepare_for_mutation()
+            summary = VaultPublisherService().publish_date(date.fromisoformat(brief_date))
+            sync.push_local_control_changes(message=f"Publish viewer artifacts for {brief_date}")
+            return summary.model_dump(mode="json")
+    finally:
+        reset_task_context(task_tokens)
+
+
+def sync_vault_task() -> dict:
+    _, task_name, task_tokens = _task_metadata("research_center.sync_vault")
+    try:
+        with track_task_metrics(task_name):
+            status = VaultGitSyncService().synchronize_local_control(message="Synchronize local-control outputs")
+            return {
+                "branch": status.branch,
+                "remote_url": status.remote_url,
+                "current_commit": status.current_commit,
+                "current_summary": status.current_summary,
+                "has_uncommitted_changes": status.has_uncommitted_changes,
+                "ahead_count": status.ahead_count,
+                "behind_count": status.behind_count,
+            }
+    finally:
+        reset_task_context(task_tokens)
+
+
+def audit_vault_task() -> dict:
+    _, task_name, task_tokens = _task_metadata("research_center.audit_vault")
+    try:
+        with track_task_metrics(task_name):
+            return VaultIngestionService().audit_vault()
+    finally:
+        reset_task_context(task_tokens)
+
+
+def export_sqlite_to_vault_task() -> dict:
+    _, task_name, task_tokens = _task_metadata("research_center.export_sqlite_to_vault")
+    try:
+        with track_task_metrics(task_name):
+            result = VaultExporter().export_from_sqlite()
+            return {
+                "exported_items": result.exported_items,
+                "vault_root": result.vault_root,
+            }
     finally:
         reset_task_context(task_tokens)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Research Center job helper.")
+    parser = argparse.ArgumentParser(description="Research Center vault job helper.")
     parser.add_argument(
         "command",
         choices=[
-            "enqueue-ingest",
-            "enqueue-enrich-all",
-            "enqueue-database-backup",
-            "enqueue-zotero-sync",
-            "enqueue-digest",
-            "enqueue-purge-raw-email-payloads",
-            "run-ingest-inline",
-            "run-enrich-all-inline",
-            "run-database-backup-inline",
-            "run-zotero-sync-inline",
+            "audit-vault-inline",
+            "advanced-compile-inline",
+            "answer-query-inline",
+            "compile-wiki-inline",
+            "export-sqlite-to-vault-inline",
+            "fetch-sources-inline",
+            "generate-audio-inline",
+            "generate-brief-inline",
+            "health-check-inline",
+            "file-output-inline",
+            "lightweight-enrich-inline",
+            "pair-device-code",
+            "publish-date-inline",
+            "publish-latest-inline",
+            "rebuild-items-index-inline",
             "run-digest-inline",
-            "run-purge-raw-email-payloads-inline",
+            "run-ingest-inline",
+            "sync-vault-inline",
+            "vault-insights-inline",
+            "vault-list-stale-inline",
+            "vault-related-inline",
+            "vault-search-inline",
+            "vault-show-doc-inline",
         ],
     )
+    parser.add_argument("--brief-date", dest="brief_date")
+    parser.add_argument("--label", dest="label")
+    parser.add_argument("--source-id", dest="source_id")
+    parser.add_argument("--doc-id", dest="doc_id")
+    parser.add_argument("--limit", dest="limit", type=int)
+    parser.add_argument("--query", dest="query")
+    parser.add_argument("--question", dest="question")
+    parser.add_argument("--output-kind", dest="output_kind", choices=["answer", "slides", "chart"])
+    parser.add_argument("--path", dest="path")
+    parser.add_argument("--scope", dest="scope", choices=["vault", "wiki", "raw"])
+    parser.add_argument("--topic", dest="topic")
+    parser.add_argument("--force", dest="force", action="store_true")
     args = parser.parse_args()
-    logger.info("job_helper.command_received", extra={"command": args.command})
 
-    try:
-        if args.command == "enqueue-ingest":
-            run_ingest_task.delay()
-        elif args.command == "enqueue-enrich-all":
-            run_enrich_all_task.delay()
-        elif args.command == "enqueue-database-backup":
-            with get_session_factory()() as db:
-                OperationService(db).enqueue_database_backup(trigger="scheduled_backup")
-        elif args.command == "enqueue-zotero-sync":
-            run_zotero_sync_task.delay(only_if_due=True)
-        elif args.command == "enqueue-digest":
-            run_digest_task.delay(only_if_due=True)
-        elif args.command == "enqueue-purge-raw-email-payloads":
-            purge_raw_email_payloads_task.delay()
-        elif args.command == "run-ingest-inline":
-            run_ingest_task()
-        elif args.command == "run-enrich-all-inline":
-            run_enrich_all_task()
-        elif args.command == "run-database-backup-inline":
-            run_database_backup_task()
-        elif args.command == "run-zotero-sync-inline":
-            run_zotero_sync_task(only_if_due=True)
-        elif args.command == "run-digest-inline":
-            run_digest_task(only_if_due=True)
-        elif args.command == "run-purge-raw-email-payloads-inline":
-            purge_raw_email_payloads_task()
-    except Exception:
-        logger.exception("job_helper.command_failed", extra={"command": args.command})
-        raise
-    logger.info("job_helper.command_completed", extra={"command": args.command})
+    if args.command == "fetch-sources-inline":
+        print(json.dumps(fetch_sources_task(source_id=args.source_id), ensure_ascii=True, indent=2))
+        return
+
+    if args.command == "lightweight-enrich-inline":
+        print(
+            json.dumps(
+                lightweight_enrich_task(
+                    source_id=args.source_id,
+                    doc_id=args.doc_id,
+                    force=bool(args.force),
+                ),
+                ensure_ascii=True,
+                indent=2,
+            )
+        )
+        return
+
+    if args.command == "rebuild-items-index-inline":
+        print(json.dumps(rebuild_items_index_task(), ensure_ascii=True, indent=2))
+        return
+
+    if args.command == "advanced-compile-inline":
+        print(
+            json.dumps(
+                advanced_compile_task(source_id=args.source_id, doc_id=args.doc_id, limit=args.limit),
+                ensure_ascii=True,
+                indent=2,
+            )
+        )
+        return
+
+    if args.command == "run-ingest-inline":
+        print(
+            json.dumps(
+                {
+                    "indexed_items": run_ingest_task(source_id=args.source_id),
+                    "source_id": args.source_id,
+                },
+                ensure_ascii=True,
+                indent=2,
+            )
+        )
+        return
+
+    if args.command == "compile-wiki-inline":
+        print(
+            json.dumps(
+                advanced_compile_task(source_id=args.source_id, doc_id=args.doc_id, limit=args.limit),
+                ensure_ascii=True,
+                indent=2,
+            )
+        )
+        return
+
+    if args.command == "health-check-inline":
+        print(
+            json.dumps(
+                health_check_task(
+                    scope=(args.scope or "vault"),
+                    topic=args.topic,
+                ),
+                ensure_ascii=True,
+                indent=2,
+            )
+        )
+        return
+
+    if args.command == "answer-query-inline":
+        if not args.question:
+            raise ValueError("--question is required for answer-query-inline.")
+        print(
+            json.dumps(
+                answer_query_task(
+                    question=args.question,
+                    output_kind=(args.output_kind or "answer"),
+                ),
+                ensure_ascii=True,
+                indent=2,
+            )
+        )
+        return
+
+    if args.command == "file-output-inline":
+        if not args.path:
+            raise ValueError("--path is required for file-output-inline.")
+        print(json.dumps(file_output_task(path=args.path), ensure_ascii=True, indent=2))
+        return
+
+    if args.command == "vault-search-inline":
+        if not args.query:
+            raise ValueError("--query is required for vault-search-inline.")
+        print(json.dumps(vault_search_task(query=args.query, limit=args.limit or 10), ensure_ascii=True, indent=2))
+        return
+
+    if args.command == "vault-insights-inline":
+        print(
+            json.dumps(
+                vault_insights_task(query=args.query, limit=args.limit or 10),
+                ensure_ascii=True,
+                indent=2,
+            )
+        )
+        return
+
+    if args.command == "vault-show-doc-inline":
+        if not args.doc_id:
+            raise ValueError("--doc-id is required for vault-show-doc-inline.")
+        print(json.dumps(vault_show_doc_task(doc_id=args.doc_id), ensure_ascii=True, indent=2))
+        return
+
+    if args.command == "vault-related-inline":
+        if not args.doc_id:
+            raise ValueError("--doc-id is required for vault-related-inline.")
+        print(json.dumps(vault_related_task(doc_id=args.doc_id, limit=args.limit or 10), ensure_ascii=True, indent=2))
+        return
+
+    if args.command == "vault-list-stale-inline":
+        print(
+            json.dumps(
+                vault_list_stale_task(source_id=args.source_id, limit=args.limit),
+                ensure_ascii=True,
+                indent=2,
+            )
+        )
+        return
+
+    if args.command in {"generate-brief-inline", "run-digest-inline"}:
+        digest_id = run_digest_task(force=True, brief_date=args.brief_date, trigger="cli_brief")
+        print(json.dumps({"digest_id": digest_id}, ensure_ascii=True, indent=2))
+        return
+
+    if args.command == "generate-audio-inline":
+        print(
+            json.dumps(
+                {"status": generate_audio_task(brief_date=args.brief_date)},
+                ensure_ascii=True,
+                indent=2,
+            )
+        )
+        return
+
+    if args.command == "publish-latest-inline":
+        print(json.dumps(publish_latest_task(), ensure_ascii=True, indent=2))
+        return
+
+    if args.command == "publish-date-inline":
+        if not args.brief_date:
+            raise ValueError("--brief-date is required for publish-date-inline.")
+        print(json.dumps(publish_date_task(args.brief_date), ensure_ascii=True, indent=2))
+        return
+
+    if args.command == "sync-vault-inline":
+        print(json.dumps(sync_vault_task(), ensure_ascii=True, indent=2))
+        return
+
+    if args.command == "audit-vault-inline":
+        print(json.dumps(audit_vault_task(), ensure_ascii=True, indent=2))
+        return
+
+    if args.command == "export-sqlite-to-vault-inline":
+        print(json.dumps(export_sqlite_to_vault_task(), ensure_ascii=True, indent=2))
+        return
+
+    if args.command == "pair-device-code":
+        label = args.label or "iPad"
+        result = LocalControlService().create_pairing_code(label=label)
+        print(
+            json.dumps(
+                {
+                    "device_label": result.device_label,
+                    "pairing_token": result.pairing_token,
+                    "pairing_url": result.pairing_url,
+                    "expires_at": result.expires_at.isoformat(),
+                    "hosted_return_url": result.hosted_return_url,
+                    "qr_svg": result.qr_svg,
+                },
+                ensure_ascii=True,
+                indent=2,
+            )
+        )
+        return
+
+    raise RuntimeError(f"Unsupported command: {args.command}")
 
 
 if __name__ == "__main__":

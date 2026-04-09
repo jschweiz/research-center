@@ -41,6 +41,7 @@ class SourceType(StrEnum):
 
 class ContentType(StrEnum):
     ARTICLE = "article"
+    NEWS = "news"
     PAPER = "paper"
     NEWSLETTER = "newsletter"
     POST = "post"
@@ -61,6 +62,7 @@ class RunStatus(StrEnum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    INTERRUPTED = "interrupted"
 
 
 class ConnectionProvider(StrEnum):
@@ -244,6 +246,7 @@ class Item(Base):
     content_type: Mapped[ContentType] = mapped_column(Enum(ContentType), nullable=False)
     language: Mapped[str] = mapped_column(String(16), default="en", nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    identity_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     ingest_status: Mapped[RunStatus] = mapped_column(Enum(RunStatus), default=RunStatus.SUCCEEDED, nullable=False)
     extraction_confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
@@ -454,7 +457,390 @@ class ProfileSetting(Base):
     data_mode: Mapped[DataMode] = mapped_column(Enum(DataMode), default=DataMode.SEED, nullable=False)
     summary_depth: Mapped[str] = mapped_column(String(50), default="balanced", nullable=False)
     ranking_weights: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    ranking_thresholds: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    brief_sections: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    audio_brief_settings: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    prompt_guidance: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    alphaxiv_search_settings: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
+
+
+class PublishedEdition(Base):
+    __tablename__ = "published_editions"
+    __table_args__ = (UniqueConstraint("edition_id", name="uq_published_editions_edition_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    edition_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    period_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    brief_date: Mapped[date | None] = mapped_column(Date)
+    week_start: Mapped[date | None] = mapped_column(Date)
+    week_end: Mapped[date | None] = mapped_column(Date)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    digest_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    has_audio: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    manifest_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    manifest_path: Mapped[str] = mapped_column(String(2000), nullable=False)
+    manifest_size_bytes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    audio_path: Mapped[str | None] = mapped_column(String(2000))
+    audio_size_bytes: Mapped[int | None] = mapped_column(Integer)
+    cloudkit_record_name: Mapped[str | None] = mapped_column(String(255))
+    cloudkit_environment: Mapped[str | None] = mapped_column(String(32))
+    cloudkit_sync_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class LocalPairingCode(Base):
+    __tablename__ = "local_pairing_codes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    local_url: Mapped[str] = mapped_column(String(2000), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    redeemed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PairedDevice(Base):
+    __tablename__ = "paired_devices"
+    __table_args__ = (UniqueConstraint("token_hash", name="uq_paired_devices_token_hash"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_seen_ip: Mapped[str | None] = mapped_column(String(255))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    paired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class VaultSource(Base):
+    __tablename__ = "vault_sources"
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    type: Mapped[str] = mapped_column(String(50), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    raw_kind: Mapped[str] = mapped_column(String(80), nullable=False)
+    custom_pipeline_id: Mapped[str | None] = mapped_column(String(120))
+    classification_mode: Mapped[str] = mapped_column(String(80), default="fixed", nullable=False)
+    decomposition_mode: Mapped[str] = mapped_column(String(80), default="none", nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    tags_json: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    url: Mapped[str | None] = mapped_column(String(2000))
+    max_items: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
+    config_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class VaultRun(Base):
+    __tablename__ = "vault_runs"
+
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    run_type: Mapped[IngestionRunType] = mapped_column(Enum(IngestionRunType), nullable=False)
+    status: Mapped[RunStatus] = mapped_column(Enum(RunStatus), nullable=False)
+    operation_kind: Mapped[str] = mapped_column(String(120), nullable=False)
+    trigger: Mapped[str | None] = mapped_column(String(255))
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    prompt_path: Mapped[str | None] = mapped_column(String(2000))
+    manifest_path: Mapped[str | None] = mapped_column(String(2000))
+    changed_file_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    steps: Mapped[list[VaultRunStep]] = relationship(
+        back_populates="run", cascade="all, delete-orphan", order_by="VaultRunStep.step_index.asc()"
+    )
+    events: Mapped[list[VaultRunEvent]] = relationship(
+        back_populates="run", cascade="all, delete-orphan", order_by="VaultRunEvent.event_index.asc()"
+    )
+
+
+class VaultRunStep(Base):
+    __tablename__ = "vault_run_steps"
+    __table_args__ = (UniqueConstraint("run_id", "step_index", name="uq_vault_run_steps_run_step"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    run_id: Mapped[str] = mapped_column(ForeignKey("vault_runs.id"), nullable=False)
+    step_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    step_kind: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[RunStatus] = mapped_column(Enum(RunStatus), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_id: Mapped[str | None] = mapped_column(String(120))
+    doc_id: Mapped[str | None] = mapped_column(String(255))
+    created_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    updated_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    skipped_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    counts_by_kind_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+    run: Mapped[VaultRun] = relationship(back_populates="steps")
+
+
+class VaultRunEvent(Base):
+    __tablename__ = "vault_run_events"
+    __table_args__ = (UniqueConstraint("run_id", "event_index", name="uq_vault_run_events_run_event"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    run_id: Mapped[str] = mapped_column(ForeignKey("vault_runs.id"), nullable=False)
+    event_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    logged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    level: Mapped[str] = mapped_column(String(32), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    step_index: Mapped[int | None] = mapped_column(Integer)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+    run: Mapped[VaultRun] = relationship(back_populates="events")
+
+
+class VaultLease(Base):
+    __tablename__ = "vault_leases"
+
+    name: Mapped[str] = mapped_column(String(120), primary_key=True)
+    owner: Mapped[str] = mapped_column(String(120), nullable=False)
+    token: Mapped[str] = mapped_column(String(64), nullable=False)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class VaultStopRequest(Base):
+    __tablename__ = "vault_stop_requests"
+
+    run_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    source_id: Mapped[str | None] = mapped_column(String(120))
+    requested_by: Mapped[str] = mapped_column(String(120), nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class VaultPairingCode(Base):
+    __tablename__ = "vault_pairing_codes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    local_url: Mapped[str] = mapped_column(String(2000), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    redeemed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class VaultPairedDevice(Base):
+    __tablename__ = "vault_paired_devices"
+    __table_args__ = (UniqueConstraint("token_hash", name="uq_vault_paired_devices_token_hash"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_seen_ip: Mapped[str | None] = mapped_column(String(255))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    paired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class VaultStarredItem(Base):
+    __tablename__ = "vault_starred_items"
+
+    item_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    starred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class VaultAIBudgetDay(Base):
+    __tablename__ = "vault_ai_budget_days"
+
+    budget_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    spent_usd: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    reserved_usd: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    limit_usd: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class VaultAIBudgetReservation(Base):
+    __tablename__ = "vault_ai_budget_reservations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    budget_date: Mapped[date] = mapped_column(Date, nullable=False)
+    provider: Mapped[str] = mapped_column(String(120), nullable=False)
+    operation: Mapped[str] = mapped_column(String(120), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    estimated_cost_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    actual_cost_usd: Mapped[float | None] = mapped_column(Float)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class VaultAITrace(Base):
+    __tablename__ = "vault_ai_traces"
+
+    trace_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str | None] = mapped_column(String(120))
+    provider: Mapped[str] = mapped_column(String(120), nullable=False)
+    model: Mapped[str] = mapped_column(String(255), nullable=False)
+    operation: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    prompt_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_path: Mapped[str | None] = mapped_column(String(2000))
+    trace_path: Mapped[str | None] = mapped_column(String(2000))
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    context_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+
+
+class VaultRawDocument(Base):
+    __tablename__ = "vault_raw_documents"
+
+    raw_doc_path: Mapped[str] = mapped_column(String(2000), primary_key=True)
+    doc_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(80), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_id: Mapped[str | None] = mapped_column(String(120))
+    source_name: Mapped[str | None] = mapped_column(String(255))
+    canonical_url: Mapped[str | None] = mapped_column(String(2000))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    identity_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    tags_json: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    asset_paths_json: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
+    doc_role: Mapped[str] = mapped_column(String(32), default="primary", nullable=False)
+    parent_id: Mapped[str | None] = mapped_column(String(255))
+    index_visibility: Mapped[str] = mapped_column(String(32), default="visible", nullable=False)
+    short_summary: Mapped[str | None] = mapped_column(Text)
+    lightweight_enrichment_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    lightweight_enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lightweight_enrichment_model: Mapped[str | None] = mapped_column(String(255))
+    lightweight_scoring_model: Mapped[str | None] = mapped_column(String(255))
+    body_text: Mapped[str | None] = mapped_column(Text)
+    frontmatter_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class VaultItemProjection(Base):
+    __tablename__ = "vault_items"
+
+    item_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    raw_doc_path: Mapped[str] = mapped_column(String(2000), nullable=False, unique=True)
+    kind: Mapped[str] = mapped_column(String(80), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_id: Mapped[str | None] = mapped_column(String(120), index=True)
+    source_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    organization_name: Mapped[str | None] = mapped_column(String(255))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    canonical_url: Mapped[str] = mapped_column(String(2000), nullable=False)
+    content_type: Mapped[ContentType] = mapped_column(Enum(ContentType), nullable=False, index=True)
+    extraction_confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    cleaned_text: Mapped[str | None] = mapped_column(Text)
+    short_summary: Mapped[str | None] = mapped_column(Text)
+    tags_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False, index=True)
+    doc_role: Mapped[str] = mapped_column(String(32), default="primary", nullable=False)
+    parent_id: Mapped[str | None] = mapped_column(String(255))
+    index_visibility: Mapped[str] = mapped_column(String(32), default="visible", nullable=False, index=True)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    identity_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    bucket: Mapped[ScoreBucket] = mapped_column(Enum(ScoreBucket), default=ScoreBucket.ARCHIVE, nullable=False, index=True)
+    total_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, index=True)
+    trend_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    novelty_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    lightweight_enrichment_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    lightweight_enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class VaultTopic(Base):
+    __tablename__ = "vault_topics"
+
+    topic_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    slug: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    page_path: Mapped[str | None] = mapped_column(String(2000))
+    source_diversity: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_item_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    recent_item_count_7d: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    recent_item_count_30d: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    trend_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, index=True)
+    novelty_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+
+class VaultTopicEdge(Base):
+    __tablename__ = "vault_topic_edges"
+
+    source_topic_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    target_topic_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    weight: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class VaultWikiPage(Base):
+    __tablename__ = "vault_wiki_pages"
+
+    page_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    path: Mapped[str] = mapped_column(String(2000), nullable=False, unique=True)
+    page_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    namespace: Mapped[str] = mapped_column(String(120), nullable=False)
+    slug: Mapped[str] = mapped_column(String(255), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    managed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+
+class VaultPublishedEdition(Base):
+    __tablename__ = "vault_published_editions"
+
+    edition_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    record_name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    period_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    brief_date: Mapped[date | None] = mapped_column(Date)
+    week_start: Mapped[date | None] = mapped_column(Date)
+    week_end: Mapped[date | None] = mapped_column(Date)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    has_audio: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+
+class VaultProjectionState(Base):
+    __tablename__ = "vault_projection_states"
+
+    name: Mapped[str] = mapped_column(String(80), primary_key=True)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)

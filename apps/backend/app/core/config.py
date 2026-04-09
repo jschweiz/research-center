@@ -1,11 +1,26 @@
+from datetime import timedelta
 from functools import lru_cache
+from os import path as os_path
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = BACKEND_ROOT.parent.parent
+
+
+def _default_vault_root_dir() -> Path:
+    return REPO_ROOT / "vault"
+
+
+def _default_local_state_dir() -> Path:
+    return BACKEND_ROOT / ".local-state"
+
+
+def _default_codex_add_dirs() -> list[Path]:
+    return [BACKEND_ROOT]
 
 
 class Settings(BaseSettings):
@@ -18,8 +33,6 @@ class Settings(BaseSettings):
     api_prefix: str = "/api"
     frontend_origin: str = "http://localhost:5173"
     database_url: str = "sqlite+pysqlite:///./research_center.db"
-    celery_broker_url: str = "redis://localhost:6379/0"
-    celery_result_backend: str = "redis://localhost:6379/1"
     secret_key: str = "change-me"
     encryption_key: str = "change-me"
     admin_email: str = "admin@example.com"
@@ -28,19 +41,26 @@ class Settings(BaseSettings):
     login_rate_limit_window_minutes: int = Field(default=15, ge=1, le=1440)
     login_rate_limit_lockout_minutes: int = Field(default=30, ge=1, le=10080)
     auto_create_schema: bool = True
-    seed_demo_data: bool = True
+    seed_demo_data: bool = False
     timezone: str = "Europe/Zurich"
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.5-flash"
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     gemini_timeout_seconds: int = 30
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "gemma4:e2b"
+    ollama_timeout_seconds: int = 45
     ai_daily_cost_limit_usd: float = Field(default=10.0, ge=0.0, le=100000.0)
     ai_budget_reservation_ttl_minutes: int = Field(default=120, ge=1, le=1440)
+    ai_trace_retention_days: int = Field(default=30, ge=1, le=3650)
     llm_input_token_cost_per_million_usd: float = Field(default=0.3, ge=0.0)
     llm_output_token_cost_per_million_usd: float = Field(default=2.5, ge=0.0)
     llm_total_token_cost_per_million_usd: float = Field(default=0.3, ge=0.0)
     google_application_credentials: str | None = None
     google_cloud_tts_credentials_json: str | None = None
+    gmail_ingest_email: str | None = None
+    gmail_ingest_app_password: str | None = None
+    gmail_ingest_access_token: str | None = None
     google_tts_api_base_url: str = "https://texttospeech.googleapis.com/v1"
     google_oauth_token_url: str = "https://oauth2.googleapis.com/token"
     google_tts_timeout_seconds: int = 60
@@ -77,14 +97,61 @@ class Settings(BaseSettings):
     metrics_enabled: bool = True
     metrics_path: str = "/metrics"
     metrics_token: str | None = None
-    worker_metrics_host: str = "127.0.0.1"
-    worker_metrics_port: int | None = Field(default=None, ge=1, le=65535)
     database_backup_dir: Path = BACKEND_ROOT / ".backups" / "database"
     database_backup_retention_count: int = Field(default=14, ge=1, le=365)
     digest_default_hour: int = Field(default=7, ge=0, le=23)
     digest_default_minute: int = Field(default=0, ge=0, le=59)
     session_cookie_name: str = "research_center_session"
     audio_cache_dir: Path = BACKEND_ROOT / ".cache" / "audio_briefs"
+    vault_root_dir: Path = Field(default_factory=_default_vault_root_dir)
+    local_state_dir: Path = Field(default_factory=_default_local_state_dir)
+    default_job_lease_ttl_seconds: int = Field(default=600, ge=60, le=86400)
+    local_server_base_url: str = "http://localhost:8000"
+    hosted_viewer_url: str | None = None
+    local_pairing_token_ttl_minutes: int = Field(default=30, ge=1, le=1440)
+    local_control_token_max_age_days: int = Field(default=180, ge=1, le=3650)
+    local_web_mode: Literal["local"] = "local"
+    web_dist_dir: Path = BACKEND_ROOT.parent / "web" / "dist"
+    vault_source_pipelines_enabled: bool = True
+    vault_git_enabled: bool = True
+    vault_git_remote_name: str = "origin"
+    vault_git_remote_url: str = "https://github.com/jschweiz/research-vault"
+    vault_git_branch: str = "main"
+    vault_git_commit_prefix: str = "vault-sync"
+    codex_binary: str = "codex"
+    codex_model: str | None = None
+    codex_profile: str | None = None
+    codex_timeout_minutes: int = Field(default=20, ge=1, le=240)
+    codex_search_enabled: bool = True
+    codex_add_dirs: list[Path] = Field(default_factory=_default_codex_add_dirs)
+    codex_compile_batch_size: int = Field(default=12, ge=1, le=50)
+    cloudkit_container_identifier: str | None = None
+    cloudkit_environment: Literal["development", "production"] = "development"
+    cloudkit_database: Literal["public"] = "public"
+    cloudkit_api_token: str | None = None
+    cloudkit_server_to_server_key_id: str | None = None
+    cloudkit_server_to_server_private_key_pem: str | None = None
+    cloudkit_record_type: str = "PublishedEdition"
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_blank_optional_values(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        normalized: dict[str, Any] = {}
+        for key, value in data.items():
+            field = cls.model_fields.get(key)
+            if (
+                field is not None
+                and field.default is None
+                and isinstance(value, str)
+                and not value.strip()
+            ):
+                normalized[key] = None
+            else:
+                normalized[key] = value
+        return normalized
 
     @property
     def is_production(self) -> bool:
@@ -97,6 +164,66 @@ class Settings(BaseSettings):
         if self.log_format == "text":
             return False
         return self.is_production
+
+    @property
+    def default_job_lease_ttl(self) -> timedelta:
+        return timedelta(seconds=self.default_job_lease_ttl_seconds)
+
+    @property
+    def cloudkit_read_configured(self) -> bool:
+        return bool(self.cloudkit_container_identifier and self.cloudkit_api_token)
+
+    @property
+    def cloudkit_write_configured(self) -> bool:
+        return bool(
+            self.cloudkit_read_configured
+            and self.cloudkit_server_to_server_key_id
+            and self.cloudkit_server_to_server_private_key_pem
+        )
+
+    @field_validator("codex_add_dirs", mode="before")
+    @classmethod
+    def parse_codex_add_dirs(cls, value: Any) -> Any:
+        if value is None:
+            return _default_codex_add_dirs()
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return _default_codex_add_dirs()
+            if stripped.startswith("["):
+                return stripped
+            return [
+                Path(part.strip())
+                for chunk in stripped.splitlines()
+                for part in chunk.split(",")
+                if part.strip()
+            ]
+        return value
+
+    @model_validator(mode="after")
+    def normalize_paths(self) -> "Settings":
+        for field_name in (
+            "audio_cache_dir",
+            "database_backup_dir",
+            "vault_root_dir",
+            "local_state_dir",
+            "web_dist_dir",
+        ):
+            value = getattr(self, field_name)
+            normalized = value.expanduser()
+            if not normalized.is_absolute():
+                base = REPO_ROOT if field_name in {"vault_root_dir", "local_state_dir"} else BACKEND_ROOT
+                normalized = (base / normalized).resolve()
+            setattr(self, field_name, normalized)
+        normalized_codex_dirs: list[Path] = []
+        for path in self.codex_add_dirs:
+            normalized = path.expanduser()
+            if not normalized.is_absolute():
+                base = REPO_ROOT if not os_path.isabs(str(path)) else BACKEND_ROOT
+                normalized = (base / normalized).resolve()
+            normalized_codex_dirs.append(normalized)
+        self.codex_add_dirs = normalized_codex_dirs or _default_codex_add_dirs()
+        return self
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":

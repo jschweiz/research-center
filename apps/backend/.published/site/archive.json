@@ -1,0 +1,43 @@
+{
+  "editions": [
+    {
+      "audio_path": "latest/audio.mp3",
+      "brief_date": "2026-04-07",
+      "bundle_slug": "day-2026-04-07",
+      "edition_id": "day:2026-04-07",
+      "generated_at": "2026-04-07T08:39:17.696030",
+      "has_audio": true,
+      "history_html_path": "history/day-2026-04-07/index.html",
+      "html_path": "latest/index.html",
+      "manifest_path": "latest/manifest.json",
+      "markdown_path": "latest/brief.md",
+      "period_type": "day",
+      "published_at": "2026-04-07T08:39:17.758936Z",
+      "record_name": "PublishedEdition::day::2026-04-07",
+      "schema_version": 1,
+      "title": "Morning Brief \u2022 2026-04-07",
+      "week_end": null,
+      "week_start": null
+    }
+  ],
+  "generated_at": "2026-04-07T08:39:17.784804+00:00",
+  "latest": {
+    "audio_path": "latest/audio.mp3",
+    "brief_date": "2026-04-07",
+    "bundle_slug": "day-2026-04-07",
+    "edition_id": "day:2026-04-07",
+    "generated_at": "2026-04-07T08:39:17.696030",
+    "has_audio": true,
+    "history_html_path": "history/day-2026-04-07/index.html",
+    "html_path": "latest/index.html",
+    "manifest_path": "latest/manifest.json",
+    "markdown_path": "latest/brief.md",
+    "period_type": "day",
+    "published_at": "2026-04-07T08:39:17.758936Z",
+    "record_name": "PublishedEdition::day::2026-04-07",
+    "schema_version": 1,
+    "title": "Morning Brief \u2022 2026-04-07",
+    "week_end": null,
+    "week_start": null
+  }
+}

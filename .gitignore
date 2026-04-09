@@ -25,6 +25,7 @@ apps/web/vite.config.js
 apps/web/vite.config.d.ts
 apps/backend/.pytest_cache/
 apps/backend/.coverage
+apps/backend/.local-state
 apps/backend/research_center.db
 apps/backend/.backups/
 apps/backend/alembic/versions/__pycache__/

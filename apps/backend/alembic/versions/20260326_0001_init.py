@@ -5,12 +5,11 @@ Revises:
 Create Date: 2026-03-26 10:00:00.000000
 """
 
-from alembic import op
 from sqlalchemy import text
 
+from alembic import op
 from app.db.base import Base
 from app.db.models import *  # noqa: F403
-
 
 revision = "20260326_0001"
 down_revision = None

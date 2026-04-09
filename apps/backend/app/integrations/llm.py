@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import date, datetime
+from datetime import UTC, date, datetime
+from time import perf_counter
 from typing import Any
 
 import httpx
 
 from app.core.config import get_settings
+from app.core.metrics import record_llm_fallback
 from app.services.ai_budget import AIBudgetExceededError, AIBudgetService
+from app.services.ai_observability import AIInvocationRecorder
 from app.services.text import compact_signal_note, normalize_item_title, normalize_whitespace
 
 SUMMARY_SCHEMA = {
@@ -160,6 +163,62 @@ ITEM_ENRICHMENT_SCHEMA = {
     "required": ["items"],
 }
 
+LIGHTWEIGHT_ENRICHMENT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "short_summary": {"type": ["string", "null"]},
+        "authors": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {"type": "string"},
+        },
+        "tags": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {"type": "string"},
+        },
+    },
+    "required": ["short_summary", "authors", "tags"],
+}
+
+LIGHTWEIGHT_ENRICHMENT_PROMPT_VERSION = "2026-04-08-structured-v1"
+LIGHTWEIGHT_SCORING_PROMPT_VERSION = "2026-04-08-rubric-v2"
+
+LIGHTWEIGHT_SCORING_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "relevance_score": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "source_fit_score": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "topic_fit_score": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "author_fit_score": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "evidence_fit_score": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "confidence_score": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "bucket_hint": {
+            "type": "string",
+            "enum": ["must_read", "worth_a_skim", "archive"],
+        },
+        "reason": {"type": "string"},
+        "evidence_quotes": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {"type": "string"},
+        },
+    },
+    "required": [
+        "relevance_score",
+        "source_fit_score",
+        "topic_fit_score",
+        "author_fit_score",
+        "evidence_fit_score",
+        "confidence_score",
+        "bucket_hint",
+        "reason",
+        "evidence_quotes",
+    ],
+}
+
 AUDIO_SECTION_BRIEF_STYLE = {
     "editorial_shortlist": {
         "headline_prefix": "To start",
@@ -223,6 +282,7 @@ SUMMARY_MAX_OUTPUT_TOKENS = 700
 DEEPER_MAX_OUTPUT_TOKENS = 900
 ZOTERO_TAGS_MAX_OUTPUT_TOKENS = 240
 ITEM_ENRICHMENT_MAX_OUTPUT_TOKENS = 1600
+LIGHTWEIGHT_SCORING_MAX_OUTPUT_TOKENS = 700
 AUDIO_BRIEF_MAX_OUTPUT_TOKENS = 2600
 EDITORIAL_NOTE_MAX_OUTPUT_TOKENS = 256
 NEWSLETTER_FACTS_MAX_OUTPUT_TOKENS = 1800
@@ -337,9 +397,202 @@ class LLMClient:
     def __init__(self) -> None:
         self.settings = get_settings()
         self.budget_service = AIBudgetService()
+        self.invocation_recorder = AIInvocationRecorder()
+
+    def ollama_status(self) -> dict[str, Any]:
+        try:
+            response = httpx.get(
+                f"{self.settings.ollama_base_url.rstrip('/')}/api/tags",
+                timeout=self.settings.ollama_timeout_seconds,
+            )
+            response.raise_for_status()
+        except Exception as exc:
+            return {
+                "available": False,
+                "model": self.settings.ollama_model,
+                "detail": f"Ollama is unavailable: {exc}",
+            }
+
+        payload = response.json()
+        models = payload.get("models") if isinstance(payload, dict) else None
+        names = {
+            str(model.get("name") or "").strip()
+            for model in (models or [])
+            if isinstance(model, dict)
+        }
+        if self.settings.ollama_model in names:
+            return {
+                "available": True,
+                "model": self.settings.ollama_model,
+                "detail": f"Ollama model {self.settings.ollama_model} is ready.",
+            }
+        if names:
+            return {
+                "available": False,
+                "model": self.settings.ollama_model,
+                "detail": (
+                    f"Ollama is reachable, but model {self.settings.ollama_model} is not pulled. "
+                    f"Available models: {', '.join(sorted(names))}."
+                ),
+            }
+        return {
+            "available": False,
+            "model": self.settings.ollama_model,
+            "detail": "Ollama is reachable, but no models are available.",
+        }
+
+    def lightweight_enrich_raw_document(self, item: dict[str, Any], text: str) -> dict[str, Any]:
+        normalized_item = self._normalize_item_context(item)
+        prompt = (
+            "Produce a lightweight metadata pass for one raw research document.\n"
+            "Return JSON only.\n"
+            "Only infer authors when the source text clearly supports them.\n"
+            "Keep the summary to 1 or 2 tight sentences.\n"
+            "Tags should be short lowercase phrases and should stay close to the document's actual content.\n"
+            "Do not invent claims beyond the provided text.\n"
+            f"Document kind: {normalized_item.get('content_type')}\n"
+            f"Title: {normalized_item.get('title')}\n"
+            f"Source: {normalized_item.get('source_name')}\n"
+            f"Current authors: {', '.join(normalized_item.get('authors') or []) or 'None'}\n"
+            f"Current tags: {', '.join(normalized_item.get('tags') or []) or 'None'}\n\n"
+            f"Source text:\n{text[:12000]}"
+        )
+        parsed, usage, trace = self._generate_ollama_json(
+            operation_name="lightweight_enrich_raw_document",
+            prompt=prompt,
+            schema_name="lightweight_enrichment",
+            schema=LIGHTWEIGHT_ENRICHMENT_SCHEMA,
+            temperature=0.1,
+            error_prefix="Ollama lightweight enrichment failed",
+        )
+
+        normalized_payload = self._normalize_lightweight_enrichment_payload(
+            normalized_item,
+            parsed,
+            text,
+        )
+        return self._attach_trace_metadata(
+            normalized_payload,
+            usage=usage,
+            trace=trace,
+        )
+
+    def lightweight_enrichment_pipeline_signature(self) -> str:
+        return (
+            f"ollama:{self.settings.ollama_model}:lightweight_enrichment:"
+            f"{LIGHTWEIGHT_ENRICHMENT_PROMPT_VERSION}"
+        )
+
+    def judge_lightweight_document(
+        self,
+        item: dict[str, Any],
+        text: str,
+        *,
+        profile: dict[str, Any],
+        source_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        normalized_item = self._normalize_item_context(item)
+        normalized_source = source_context if isinstance(source_context, dict) else {}
+        prompt_guidance = ""
+        if isinstance(profile.get("prompt_guidance"), dict):
+            prompt_guidance = normalize_whitespace(str(profile["prompt_guidance"].get("enrichment") or ""))
+
+        profile_lines = [
+            f"- Favorite topics: {', '.join(profile.get('favorite_topics') or []) or 'None'}",
+            f"- Favorite authors: {', '.join(profile.get('favorite_authors') or []) or 'None'}",
+            f"- Favorite sources: {', '.join(profile.get('favorite_sources') or []) or 'None'}",
+            f"- Ignored topics: {', '.join(profile.get('ignored_topics') or []) or 'None'}",
+        ]
+        source_lines = [
+            f"- Source name: {normalized_source.get('name') or normalized_item.get('source_name') or 'Unknown'}",
+            f"- Source id: {normalized_source.get('source_id') or normalized_item.get('source_id') or 'Unknown'}",
+            f"- Source type: {normalized_source.get('type') or 'Unknown'}",
+            f"- Source description: {normalized_source.get('description') or 'None'}",
+            f"- Source tags: {', '.join(normalized_source.get('tags') or []) or 'None'}",
+        ]
+        document_lines = [
+            f"- Document kind: {normalized_item.get('content_type')}",
+            f"- Title: {normalized_item.get('title')}",
+            f"- Current summary: {normalized_item.get('short_summary') or 'None'}",
+            f"- Authors: {', '.join(normalized_item.get('authors') or []) or 'None'}",
+            f"- Tags: {', '.join(normalized_item.get('tags') or []) or 'None'}",
+        ]
+        prompt = (
+            "<task>\n"
+            "Judge how relevant this document is for the specific user profile.\n"
+            "Evaluate each rubric criterion separately before deciding the overall score.\n"
+            "Ground every score in explicit evidence from the document, source context, and user profile.\n"
+            "Be conservative: weak, generic, or indirect evidence should reduce the score.\n"
+            "</task>\n\n"
+            "<evaluation_process>\n"
+            "1. Identify concrete evidence and mismatches before scoring.\n"
+            "2. Score each rubric criterion independently instead of letting one strong signal dominate.\n"
+            "3. Apply penalties for ignored-topic overlap, generic industry chatter, thin evidence, and missing author/source support.\n"
+            "4. Set relevance_score from the rubric scores, not from general enthusiasm about the topic.\n"
+            "5. Use must_read only when the document is clearly high-priority for this specific user right now.\n"
+            "</evaluation_process>\n\n"
+            "<rubric>\n"
+            "- topic_fit_score: how strongly the document topics match favorite topics and avoid ignored topics.\n"
+            "- source_fit_score: how useful this source and its stated remit are for the user's workflow.\n"
+            "- author_fit_score: how much the named authors overlap with the user's preferred authors.\n"
+            "- evidence_fit_score: how concrete, information-dense, and actionable the document appears from the title, summary, and text.\n"
+            "- relevance_score: overall fit for what the user should read next; weight topic fit and evidence most heavily.\n"
+            "- confidence_score: confidence in the judgment based on the available evidence.\n"
+            "- bucket_hint: use must_read only for clearly high-priority fit, worth_a_skim for meaningful but secondary fit, archive for weak or noisy fit.\n"
+            "Scoring anchors:\n"
+            "  * 0.00-0.15: clearly irrelevant or unsupported.\n"
+            "  * 0.16-0.35: weak overlap or generic interest only.\n"
+            "  * 0.36-0.55: some relevance, but not urgent.\n"
+            "  * 0.56-0.75: strong fit and likely worth skimming soon.\n"
+            "  * 0.76-1.00: clear high-priority fit and likely must-read.\n"
+            "Calibration notes:\n"
+            "  * Do not reward missing evidence; unknown authors or weak source fit should stay low.\n"
+            "  * Do not give >0.75 relevance on a vague title or generic summary without strong body evidence.\n"
+            "  * A document can be broadly interesting and still score low for this user if the profile fit is weak.\n"
+            "</rubric>\n\n"
+            "<user_profile>\n"
+            f"{chr(10).join(profile_lines)}\n"
+            f"{f'- Additional operator guidance: {prompt_guidance}{chr(10)}' if prompt_guidance else ''}"
+            "</user_profile>\n\n"
+            "<source_context>\n"
+            f"{chr(10).join(source_lines)}\n"
+            "</source_context>\n\n"
+            "<document>\n"
+            f"{chr(10).join(document_lines)}\n\n"
+            f"{self._truncate_context_block(text, limit=12000)}\n"
+            "</document>\n\n"
+            "<output_contract>\n"
+            "Return JSON only.\n"
+            "Keep reason to one concise sentence.\n"
+            "Return up to 3 short evidence_quotes copied verbatim from the document when possible.\n"
+            "If there is not enough evidence for a strong claim, lower the score instead of guessing.\n"
+            "Do not invent evidence or profile matches.\n"
+            "</output_contract>"
+        )
+        parsed, usage, trace = self._generate_ollama_json(
+            operation_name="judge_lightweight_document",
+            prompt=prompt,
+            schema_name="lightweight_scoring",
+            schema=LIGHTWEIGHT_SCORING_SCHEMA,
+            temperature=0.1,
+            error_prefix="Ollama lightweight scoring failed",
+        )
+        normalized_payload = self._normalize_lightweight_score_payload(parsed)
+        return self._attach_trace_metadata(
+            normalized_payload,
+            usage=usage,
+            trace=trace,
+        )
+
+    def lightweight_scoring_pipeline_signature(self) -> str:
+        return (
+            f"ollama:{self.settings.ollama_model}:lightweight_scoring:"
+            f"{LIGHTWEIGHT_SCORING_PROMPT_VERSION}"
+        )
 
     def summarize_item(self, item: dict[str, Any], text: str) -> dict[str, Any]:
         normalized_item = self._normalize_item_context(item)
+        fallback_trace: dict[str, Any] | None = None
         if self.settings.gemini_api_key:
             try:
                 return self._normalize_summary_payload(
@@ -349,19 +602,26 @@ class LLMClient:
                 )
             except AIBudgetExceededError as exc:
                 self._log_budget_fallback("summarize_item", exc)
-            except Exception:
-                pass
-        return self._normalize_summary_payload(normalized_item, self._heuristic_summary(normalized_item, text), text)
+            except Exception as exc:
+                record_llm_fallback(operation="summarize_item", reason="remote_error")
+                fallback_trace = self._fallback_trace_from_exception(exc)
+        return self._attach_trace_metadata(
+            self._normalize_summary_payload(normalized_item, self._heuristic_summary(normalized_item, text), text),
+            usage=None,
+            trace=fallback_trace,
+        )
 
     def deepen_item(self, item: dict[str, Any], text: str) -> dict[str, Any]:
         normalized_item = self._normalize_item_context(item)
+        fallback_trace: dict[str, Any] | None = None
         if self.settings.gemini_api_key:
             try:
                 return self._remote_deeper(normalized_item, text)
             except AIBudgetExceededError as exc:
                 self._log_budget_fallback("deepen_item", exc)
-            except Exception:
-                pass
+            except Exception as exc:
+                record_llm_fallback(operation="deepen_item", reason="remote_error")
+                fallback_trace = self._fallback_trace_from_exception(exc)
         summary = self._normalize_summary_payload(normalized_item, self._heuristic_summary(normalized_item, text), text)
         summary["deeper_summary"] = (
             f"{summary['short_summary']} This deserves a closer read for evidence quality, "
@@ -372,7 +632,7 @@ class LLMClient:
             "List the missing ablations or controls before trusting the main claim.",
             "Identify one follow-up experiment that would falsify the central argument.",
         ]
-        return summary
+        return self._attach_trace_metadata(summary, usage=None, trace=fallback_trace)
 
     def suggest_zotero_tags(
         self,
@@ -412,7 +672,7 @@ class LLMClient:
             except AIBudgetExceededError as exc:
                 self._log_budget_fallback("suggest_zotero_tags", exc)
             except Exception:
-                pass
+                record_llm_fallback(operation="suggest_zotero_tags", reason="remote_error")
         return self._heuristic_zotero_tags(normalized_item, text, normalized_allowed_tags, insight or {}), None
 
     def batch_enrich_items(
@@ -428,6 +688,12 @@ class LLMClient:
             raise ValueError("batch_enrich_items accepts at most 10 items per request.")
 
         normalized_items = [self._normalize_item_context(item) for item in items]
+        prompt_guidance = (
+            profile.get("prompt_guidance")
+            if isinstance(profile.get("prompt_guidance"), dict)
+            else {}
+        )
+        enrichment_guidance = normalize_whitespace(str(prompt_guidance.get("enrichment") or ""))
         profile_lines = [
             "User profile:",
             f"- Favorite topics: {', '.join(profile.get('favorite_topics') or []) or 'None'}",
@@ -465,6 +731,7 @@ class LLMClient:
             "If the evidence for authors is weak, return an empty authors array.\n"
             "Prefer concise lowercase tags such as topic areas, methods, or themes.\n\n"
             f"{chr(10).join(profile_lines)}\n\n"
+            f"{'Additional operator guidance: ' + enrichment_guidance + chr(10) + chr(10) if enrichment_guidance else ''}"
             "Items:\n"
             f"{chr(10).join(item_blocks)}"
         )
@@ -475,12 +742,14 @@ class LLMClient:
             ),
             operation_name="batch_enrich_items",
             prompt=prompt,
+            schema_name="item_enrichment",
             schema=ITEM_ENRICHMENT_SCHEMA,
             max_output_tokens=ITEM_ENRICHMENT_MAX_OUTPUT_TOKENS,
         )
 
     def compose_audio_brief(self, digest: dict[str, Any]) -> dict[str, Any]:
         shortlisted_items = digest.get("shortlisted_items", [])
+        fallback_trace: dict[str, Any] | None = None
         if self.settings.gemini_api_key:
             try:
                 heuristic_fallback = self._heuristic_audio_brief(digest)
@@ -498,13 +767,15 @@ class LLMClient:
                 return payload
             except AIBudgetExceededError as exc:
                 self._log_budget_fallback("compose_audio_brief", exc)
-            except Exception:
-                pass
+            except Exception as exc:
+                record_llm_fallback(operation="compose_audio_brief", reason="remote_error")
+                fallback_trace = self._fallback_trace_from_exception(exc)
         payload = self._heuristic_audio_brief(digest)
         payload["generation_mode"] = "heuristic"
-        return payload
+        return self._attach_trace_metadata(payload, usage=None, trace=fallback_trace)
 
     def compose_editorial_note(self, digest: dict[str, Any]) -> dict[str, Any]:
+        fallback_trace: dict[str, Any] | None = None
         if self.settings.gemini_api_key:
             try:
                 payload = self._remote_editorial_note(digest)
@@ -516,14 +787,16 @@ class LLMClient:
                 return payload
             except AIBudgetExceededError as exc:
                 self._log_budget_fallback("compose_editorial_note", exc)
-            except Exception:
-                pass
+            except Exception as exc:
+                record_llm_fallback(operation="compose_editorial_note", reason="remote_error")
+                fallback_trace = self._fallback_trace_from_exception(exc)
         payload = self._heuristic_editorial_note(digest)
         payload["generation_mode"] = "heuristic"
-        return payload
+        return self._attach_trace_metadata(payload, usage=None, trace=fallback_trace)
 
     def split_newsletter_message(self, newsletter: dict[str, Any]) -> dict[str, Any]:
         heuristic_fallback = self._heuristic_newsletter_facts(newsletter)
+        fallback_trace: dict[str, Any] | None = None
         if self.settings.gemini_api_key:
             try:
                 payload = self._remote_newsletter_facts(newsletter)
@@ -536,10 +809,11 @@ class LLMClient:
                 return payload
             except AIBudgetExceededError as exc:
                 self._log_budget_fallback("split_newsletter_message", exc)
-            except Exception:
-                pass
+            except Exception as exc:
+                record_llm_fallback(operation="split_newsletter_message", reason="remote_error")
+                fallback_trace = self._fallback_trace_from_exception(exc)
         heuristic_fallback["generation_mode"] = "heuristic"
-        return heuristic_fallback
+        return self._attach_trace_metadata(heuristic_fallback, usage=None, trace=fallback_trace)
 
     def _remote_summary(self, item: dict[str, Any], text: str) -> dict[str, Any]:
         prompt = (
@@ -559,11 +833,104 @@ class LLMClient:
             ),
             operation_name="summarize_item",
             prompt=prompt,
+            schema_name="summary",
             schema=SUMMARY_SCHEMA,
             max_output_tokens=SUMMARY_MAX_OUTPUT_TOKENS,
         )
         payload["generated_at"] = datetime.now().isoformat()
         return payload
+
+    def _normalize_lightweight_enrichment_payload(
+        self,
+        item: dict[str, Any],
+        payload: dict[str, Any],
+        text: str,
+    ) -> dict[str, Any]:
+        current_authors = [str(author).strip() for author in (item.get("authors") or []) if str(author).strip()]
+        current_tags = [str(tag).strip().lower() for tag in (item.get("tags") or []) if str(tag).strip()]
+        summary = normalize_whitespace(str(payload.get("short_summary") or ""))
+        summary = summary[:500].strip() or self._heuristic_short_summary(text)
+        authors = [
+            str(author).strip()
+            for author in (payload.get("authors") or [])
+            if str(author).strip()
+        ]
+        tags = [
+            normalize_whitespace(str(tag).strip().lower())
+            for tag in (payload.get("tags") or [])
+            if str(tag).strip()
+        ]
+
+        merged_authors = list(dict.fromkeys([*current_authors, *authors]))[:6]
+        merged_tags = list(dict.fromkeys([*current_tags, *tags]))[:10]
+        return {
+            "short_summary": summary or None,
+            "authors": merged_authors,
+            "tags": merged_tags,
+            "generation_mode": "ollama",
+            "model": self.settings.ollama_model,
+        }
+
+    def _normalize_lightweight_score_payload(
+        self,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        relevance_score = self._normalize_unit_score(payload.get("relevance_score"))
+        source_fit_score = self._normalize_unit_score(payload.get("source_fit_score"))
+        topic_fit_score = self._normalize_unit_score(payload.get("topic_fit_score"))
+        author_fit_score = self._normalize_unit_score(payload.get("author_fit_score"))
+        evidence_fit_score = self._normalize_unit_score(payload.get("evidence_fit_score"))
+        confidence_score = self._normalize_unit_score(payload.get("confidence_score"))
+        reason = normalize_whitespace(str(payload.get("reason") or ""))
+        evidence_quotes = [
+            normalize_whitespace(str(quote))
+            for quote in (payload.get("evidence_quotes") or [])
+            if normalize_whitespace(str(quote))
+        ][:3]
+
+        return {
+            "relevance_score": relevance_score,
+            "source_fit_score": source_fit_score,
+            "topic_fit_score": topic_fit_score,
+            "author_fit_score": author_fit_score,
+            "evidence_fit_score": evidence_fit_score,
+            "confidence_score": confidence_score,
+            "bucket_hint": self._normalize_score_bucket(
+                payload.get("bucket_hint"),
+                fallback_score=relevance_score,
+            ),
+            "reason": reason[:400] or "Profile-fit judgment grounded in the document content.",
+            "evidence_quotes": [quote[:160] for quote in evidence_quotes],
+            "model": self.settings.ollama_model,
+        }
+
+    @staticmethod
+    def _normalize_unit_score(value: Any) -> float:
+        try:
+            score = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        return round(min(max(score, 0.0), 1.0), 4)
+
+    @classmethod
+    def _normalize_score_bucket(cls, value: Any, *, fallback_score: float) -> str:
+        normalized = normalize_whitespace(str(value or "")).casefold().replace("-", "_").replace(" ", "_")
+        if normalized in {"must_read", "worth_a_skim", "archive"}:
+            return normalized
+        if fallback_score >= 0.76:
+            return "must_read"
+        if fallback_score >= 0.36:
+            return "worth_a_skim"
+        return "archive"
+
+    @staticmethod
+    def _heuristic_short_summary(text: str) -> str | None:
+        normalized = normalize_whitespace(text)
+        if not normalized:
+            return None
+        sentences = re.split(r"(?<=[.!?])\s+", normalized)
+        joined = " ".join(sentence.strip() for sentence in sentences[:2] if sentence.strip())
+        return joined[:500].strip() or None
 
     def _remote_deeper(self, item: dict[str, Any], text: str) -> dict[str, Any]:
         prompt = (
@@ -580,6 +947,7 @@ class LLMClient:
             ),
             operation_name="deepen_item",
             prompt=prompt,
+            schema_name="deeper_summary",
             schema=DEEPER_SCHEMA,
             max_output_tokens=DEEPER_MAX_OUTPUT_TOKENS,
         )
@@ -587,6 +955,8 @@ class LLMClient:
     def _remote_audio_brief(self, digest: dict[str, Any]) -> dict[str, Any]:
         shortlisted_items = digest.get("shortlisted_items", [])
         target_duration_minutes = int(digest.get("target_duration_minutes") or 5)
+        summary_depth = normalize_whitespace(str(digest.get("summary_depth") or "balanced"))
+        audio_guidance = normalize_whitespace(str(digest.get("audio_prompt_guidance") or ""))
         shortlist_lines = [
             "\n".join(
                 [
@@ -646,10 +1016,12 @@ class LLMClient:
             "Each chapter must use the exact item_id from the shortlist.\n"
             f"Digest title: {digest.get('title')}\n"
             f"Brief date: {digest.get('brief_date')}\n"
+            f"Preferred briefing depth: {summary_depth}\n"
             f"Target duration minutes: {target_duration_minutes}\n"
             f"Editorial note: {digest.get('editorial_note')}\n"
             f"Suggested follow-up: "
             f"{', '.join(digest.get('suggested_follow_ups', [])) or 'None'}\n\n"
+            f"{'Additional operator guidance: ' + audio_guidance + chr(10) + chr(10) if audio_guidance else ''}"
             "Shortlisted items:\n"
             f"{shortlist_text}"
         )
@@ -665,6 +1037,7 @@ class LLMClient:
             ),
             operation_name="compose_audio_brief",
             prompt=prompt,
+            schema_name="audio_brief",
             schema=AUDIO_BRIEF_SCHEMA,
             max_output_tokens=AUDIO_BRIEF_MAX_OUTPUT_TOKENS,
         )
@@ -675,6 +1048,8 @@ class LLMClient:
         side_signals = digest.get("interesting_side_signals", [])
         remaining_reads = digest.get("remaining_reads", [])
         audio_script = self._truncate_context_block(digest.get("audio_script"), limit=1800)
+        summary_depth = normalize_whitespace(str(digest.get("summary_depth") or "balanced"))
+        editorial_guidance = normalize_whitespace(str(digest.get("editorial_note_guidance") or ""))
 
         def format_items(label: str, items: list[dict[str, Any]]) -> str:
             if not items:
@@ -710,6 +1085,8 @@ class LLMClient:
             "If an existing voice-summary script is present, you may compress it rather than re-listing every item.\n"
             f"Digest title: {digest.get('title')}\n"
             f"Brief date: {digest.get('brief_date')}\n\n"
+            f"Preferred briefing depth: {summary_depth}\n"
+            f"{'Additional operator guidance: ' + editorial_guidance + chr(10) + chr(10) if editorial_guidance else ''}"
             f"{format_items('Editorial shortlist', editorial_shortlist)}\n\n"
             f"{format_items('Headlines', headlines)}\n\n"
             f"{format_items('Interesting side signals', side_signals)}\n\n"
@@ -723,6 +1100,7 @@ class LLMClient:
             ),
             operation_name="compose_editorial_note",
             prompt=prompt,
+            schema_name="editorial_note",
             schema=EDITORIAL_NOTE_SCHEMA,
             max_output_tokens=EDITORIAL_NOTE_MAX_OUTPUT_TOKENS,
         )
@@ -756,6 +1134,7 @@ class LLMClient:
             ),
             operation_name="split_newsletter_message",
             prompt=prompt,
+            schema_name="newsletter_facts",
             schema=NEWSLETTER_FACT_SCHEMA,
             max_output_tokens=NEWSLETTER_FACTS_MAX_OUTPUT_TOKENS,
         )
@@ -792,6 +1171,7 @@ class LLMClient:
             ),
             operation_name="suggest_zotero_tags",
             prompt="\n".join(prompt_parts),
+            schema_name="zotero_tags",
             schema=build_tagging_schema(allowed_tags),
             max_output_tokens=ZOTERO_TAGS_MAX_OUTPUT_TOKENS,
         )
@@ -803,24 +1183,42 @@ class LLMClient:
         system_instruction: str,
         operation_name: str,
         prompt: str,
+        schema_name: str | None,
         schema: dict[str, Any],
         max_output_tokens: int,
     ) -> dict[str, Any]:
+        estimated_cost_usd = self._estimate_request_max_cost_usd(
+            system_instruction=system_instruction,
+            prompt=prompt,
+            schema=schema,
+            max_output_tokens=max_output_tokens,
+        )
         reservation = self.budget_service.reserve_estimated_cost(
             provider="gemini",
             operation=operation_name,
-            estimated_cost_usd=self._estimate_request_max_cost_usd(
-                system_instruction=system_instruction,
-                prompt=prompt,
-                schema=schema,
-                max_output_tokens=max_output_tokens,
-            ),
+            estimated_cost_usd=estimated_cost_usd,
             metadata={
                 "model": self.settings.gemini_model,
                 "max_output_tokens": max_output_tokens,
             },
         )
+        started_perf = perf_counter()
+        invocation = self.invocation_recorder.begin(
+            provider="gemini",
+            model=self.settings.gemini_model,
+            operation=operation_name,
+            system_instruction=system_instruction,
+            prompt=prompt,
+            schema_name=schema_name,
+            schema=schema,
+            max_output_tokens=max_output_tokens,
+            estimated_cost_usd=estimated_cost_usd,
+            started_perf=started_perf,
+        )
         usage: dict[str, int] | None = None
+        provider_payload: Any = None
+        response_text: str | None = None
+        parsed_output: dict[str, Any] | None = None
         try:
             response = httpx.post(
                 f"{self.settings.gemini_base_url}/models/{self.settings.gemini_model}:generateContent",
@@ -841,34 +1239,62 @@ class LLMClient:
                 timeout=self.settings.gemini_timeout_seconds,
             )
             response.raise_for_status()
-            payload = response.json()
-            usage = self._extract_usage(payload)
+            provider_payload = response.json()
+            usage = self._extract_usage(provider_payload)
             parts = (
-                payload.get("candidates", [{}])[0]
+                provider_payload.get("candidates", [{}])[0]
                 .get("content", {})
                 .get("parts", [])
             )
-            text = "\n".join(part.get("text", "") for part in parts if part.get("text")).strip()
-            if not text:
+            response_text = "\n".join(part.get("text", "") for part in parts if part.get("text")).strip()
+            if not response_text:
                 raise RuntimeError("Gemini returned no text content.")
-            result = json.loads(text)
+            parsed_output = json.loads(response_text)
+            if not isinstance(parsed_output, dict):
+                raise RuntimeError("Gemini returned a non-object JSON payload.")
+            actual_cost_usd = self._estimate_usage_cost_usd(usage)
             self.budget_service.consume_reservation(
                 reservation,
-                actual_cost_usd=self._estimate_usage_cost_usd(usage),
+                actual_cost_usd=actual_cost_usd,
             )
             reservation = None
-            if usage:
-                result["_usage"] = usage
-            return result
-        except Exception:
+            trace = self.invocation_recorder.complete_success(
+                invocation,
+                completed_at=datetime.now(UTC),
+                duration_ms=self._duration_ms(started_perf),
+                usage=usage,
+                actual_cost_usd=actual_cost_usd,
+                response_text=response_text,
+                parsed_output=parsed_output,
+                provider_payload=provider_payload,
+            )
+            return self._attach_trace_metadata(
+                parsed_output,
+                usage=usage,
+                trace=trace.model_dump(mode="json"),
+            )
+        except Exception as exc:
+            actual_cost_usd = self._estimate_usage_cost_usd(usage) if usage else None
             if reservation is not None:
-                if usage:
+                if actual_cost_usd is not None:
                     self.budget_service.consume_reservation(
                         reservation,
-                        actual_cost_usd=self._estimate_usage_cost_usd(usage),
+                        actual_cost_usd=actual_cost_usd,
                     )
                 else:
                     self.budget_service.release_reservation(reservation)
+            trace = self.invocation_recorder.complete_failure(
+                invocation,
+                completed_at=datetime.now(UTC),
+                duration_ms=self._duration_ms(started_perf),
+                usage=usage,
+                actual_cost_usd=actual_cost_usd,
+                response_text=response_text,
+                parsed_output=parsed_output,
+                provider_payload=provider_payload,
+                error=exc,
+            )
+            exc.ai_trace = trace.model_dump(mode="json")
             raise
 
     def _extract_usage(self, payload: dict[str, Any]) -> dict[str, int] | None:
@@ -882,6 +1308,18 @@ class LLMClient:
         if total_tokens == 0:
             total_tokens = prompt_tokens + completion_tokens
         if prompt_tokens == 0 and completion_tokens == 0 and total_tokens == 0:
+            return None
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
+
+    def _extract_ollama_usage(self, payload: dict[str, Any]) -> dict[str, int] | None:
+        prompt_tokens = self._read_usage_int(payload.get("prompt_eval_count"))
+        completion_tokens = self._read_usage_int(payload.get("eval_count"))
+        total_tokens = prompt_tokens + completion_tokens
+        if prompt_tokens == 0 and completion_tokens == 0:
             return None
         return {
             "prompt_tokens": prompt_tokens,
@@ -948,6 +1386,7 @@ class LLMClient:
         return round(cost, 6)
 
     def _log_budget_fallback(self, operation_name: str, exc: AIBudgetExceededError) -> None:
+        record_llm_fallback(operation=operation_name, reason="budget_exceeded")
         logger.warning(
             "llm.remote_budget_limited",
             extra={
@@ -962,6 +1401,116 @@ class LLMClient:
             return max(0, int(value))
         except (TypeError, ValueError):
             return 0
+
+    def _duration_ms(self, started_perf: float) -> int:
+        return max(0, int(round((perf_counter() - started_perf) * 1000)))
+
+    def _attach_trace_metadata(
+        self,
+        payload: dict[str, Any],
+        *,
+        usage: dict[str, int] | None,
+        trace: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        normalized = dict(payload)
+        if usage:
+            normalized["_usage"] = usage
+        if trace:
+            normalized["_trace"] = trace
+        return normalized
+
+    def _generate_ollama_json(
+        self,
+        *,
+        operation_name: str,
+        prompt: str,
+        schema_name: str,
+        schema: dict[str, Any],
+        temperature: float,
+        error_prefix: str,
+    ) -> tuple[dict[str, Any], dict[str, int] | None, dict[str, Any]]:
+        status = self.ollama_status()
+        if not status.get("available"):
+            raise RuntimeError(str(status.get("detail") or "Ollama is unavailable."))
+
+        request_prompt = (
+            f"{prompt}\n\n"
+            "<json_schema>\n"
+            f"{json.dumps(schema, indent=2, sort_keys=True, ensure_ascii=True)}\n"
+            "</json_schema>\n"
+        )
+        started_perf = perf_counter()
+        invocation = self.invocation_recorder.begin(
+            provider="ollama",
+            model=self.settings.ollama_model,
+            operation=operation_name,
+            system_instruction=None,
+            prompt=request_prompt,
+            schema_name=schema_name,
+            schema=schema,
+            max_output_tokens=None,
+            estimated_cost_usd=0.0,
+            started_perf=started_perf,
+        )
+        provider_payload: Any = None
+        response_text: str | None = None
+        parsed: dict[str, Any] | None = None
+        usage: dict[str, int] | None = None
+        try:
+            response = httpx.post(
+                f"{self.settings.ollama_base_url.rstrip('/')}/api/generate",
+                json={
+                    "model": self.settings.ollama_model,
+                    "prompt": request_prompt,
+                    "stream": False,
+                    "format": schema,
+                    "options": {
+                        "temperature": temperature,
+                    },
+                },
+                timeout=self.settings.ollama_timeout_seconds,
+            )
+            response.raise_for_status()
+            provider_payload = response.json()
+            raw = provider_payload.get("response") if isinstance(provider_payload, dict) else None
+            if not isinstance(raw, str) or not raw.strip():
+                raise RuntimeError("Ollama returned no JSON payload.")
+            response_text = raw
+            loaded = json.loads(raw)
+            if not isinstance(loaded, dict):
+                raise RuntimeError("Ollama returned a JSON payload that was not an object.")
+            parsed = loaded
+            usage = self._extract_ollama_usage(provider_payload if isinstance(provider_payload, dict) else {})
+            trace = self.invocation_recorder.complete_success(
+                invocation,
+                completed_at=datetime.now(UTC),
+                duration_ms=self._duration_ms(started_perf),
+                usage=usage,
+                actual_cost_usd=0.0,
+                response_text=response_text,
+                parsed_output=parsed,
+                provider_payload=provider_payload,
+            )
+        except Exception as exc:
+            trace = self.invocation_recorder.complete_failure(
+                invocation,
+                completed_at=datetime.now(UTC),
+                duration_ms=self._duration_ms(started_perf),
+                usage=usage,
+                actual_cost_usd=0.0 if usage is not None else None,
+                response_text=response_text,
+                parsed_output=parsed,
+                provider_payload=provider_payload,
+                error=exc,
+            )
+            wrapped = RuntimeError(f"{error_prefix}: {exc}")
+            wrapped.ai_trace = trace.model_dump(mode="json")
+            raise wrapped from exc
+        return parsed, usage, trace.model_dump(mode="json")
+
+    def _fallback_trace_from_exception(self, exc: Exception) -> dict[str, Any] | None:
+        trace = getattr(exc, "ai_trace", None)
+        return trace if isinstance(trace, dict) else None
 
     def _normalize_allowed_tags(self, allowed_tags: list[str]) -> list[str]:
         normalized: list[str] = []

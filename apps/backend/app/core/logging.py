@@ -14,6 +14,7 @@ REQUEST_ID_HEADER = "X-Request-ID"
 _REQUEST_ID = ContextVar("request_id", default=None)
 _TASK_ID = ContextVar("task_id", default=None)
 _TASK_NAME = ContextVar("task_name", default=None)
+_LOG_CONTEXT = ContextVar("log_context", default=None)
 _RESERVED_LOG_RECORD_FIELDS = frozenset(logging.makeLogRecord({}).__dict__) | {
     "message",
     "asctime",
@@ -23,6 +24,21 @@ _LOG_RECORD_FACTORY_INSTALLED = False
 
 def current_request_id() -> str | None:
     return _REQUEST_ID.get()
+
+
+def current_task_id() -> str | None:
+    return _TASK_ID.get()
+
+
+def current_task_name() -> str | None:
+    return _TASK_NAME.get()
+
+
+def current_log_context() -> dict[str, Any]:
+    value = _LOG_CONTEXT.get()
+    if isinstance(value, dict):
+        return dict(value)
+    return {}
 
 
 def build_request_id(candidate: str | None = None) -> str:
@@ -57,8 +73,21 @@ def reset_task_context(tokens: tuple[Token[str | None], Token[str | None]]) -> N
     _TASK_ID.reset(task_id_token)
 
 
-def _current_context_fields() -> dict[str, str]:
-    fields: dict[str, str] = {}
+def bind_log_context(**fields: Any) -> Token[dict[str, Any] | None]:
+    merged = current_log_context()
+    for key, value in fields.items():
+        if not key or value in (None, "", (), []):
+            continue
+        merged[str(key)] = value
+    return _LOG_CONTEXT.set(merged or None)
+
+
+def reset_log_context(token: Token[dict[str, Any] | None]) -> None:
+    _LOG_CONTEXT.reset(token)
+
+
+def _current_context_fields() -> dict[str, Any]:
+    fields: dict[str, Any] = current_log_context()
     request_id = _REQUEST_ID.get()
     task_id = _TASK_ID.get()
     task_name = _TASK_NAME.get()
@@ -180,7 +209,7 @@ def configure_logging(settings: Settings) -> None:
 
     logging.captureWarnings(True)
 
-    for logger_name in ("uvicorn", "uvicorn.error", "celery", "celery.app.trace"):
+    for logger_name in ("uvicorn", "uvicorn.error"):
         logger = logging.getLogger(logger_name)
         logger.handlers.clear()
         logger.propagate = True

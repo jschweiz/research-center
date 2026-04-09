@@ -16,10 +16,14 @@ interface ItemCardProps {
   showScore?: boolean;
 }
 
-const bucketLabel: Record<ItemListEntry["bucket"], string> = {
-  must_read: "Must Read",
-  worth_a_skim: "Worth a Skim",
-  archive: "Archive",
+const contentTypeLabel: Record<ItemListEntry["content_type"], string> = {
+  article: "Article",
+  news: "News",
+  newsletter: "Newsletter",
+  paper: "Paper",
+  post: "Post",
+  signal: "Signal",
+  thread: "Thread",
 };
 
 function formatPublishedAt(value: string | null, format: "date" | "datetime") {
@@ -50,8 +54,9 @@ export function ItemCard({
   byline,
   publishedAtFormat = "datetime",
   compactActions = false,
-  showScore = true,
+  showScore = false,
 }: ItemCardProps) {
+  void showScore;
   const resolvedByline = byline?.trim() || item.authors.join(", ").trim();
 
   return (
@@ -65,11 +70,9 @@ export function ItemCard({
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.24em] text-[var(--muted)]">
-            <span className="rounded-full border border-[var(--ink)]/10 px-3 py-1">
-              {bucketLabel[item.bucket]}
-            </span>
             <span>{item.source_name}</span>
-            {showScore ? <span>{Math.round(item.total_score * 100)} score</span> : null}
+            <span className="rounded-full border border-[var(--ink)]/10 px-3 py-1">{contentTypeLabel[item.content_type]}</span>
+            {item.kind && item.kind !== item.content_type ? <span>{item.kind}</span> : null}
           </div>
           <h3 className={clsx("font-display text-[var(--ink)]", hero ? "text-4xl leading-tight" : "text-2xl leading-tight")}>
             <Link className="hover:text-[var(--accent)]" to={`/items/${item.id}`}>
@@ -84,7 +87,6 @@ export function ItemCard({
 
       <div className="mt-4 flex flex-wrap items-center gap-3 font-mono text-xs uppercase tracking-[0.18em] text-[var(--muted)]">
         {resolvedByline ? <span>{resolvedByline}</span> : null}
-        {item.also_mentioned_in_count ? <span>{item.also_mentioned_in_count} also mentioned this</span> : null}
         <span>{formatPublishedAt(item.published_at, publishedAtFormat)}</span>
       </div>
 
@@ -98,7 +100,7 @@ export function ItemCard({
       ) : null}
 
       <div className="mt-6">
-        <QuickActions compact={compactActions} itemId={item.id} showDeeper={false} starred={item.starred} url={item.canonical_url} />
+        <QuickActions compact={compactActions} itemId={item.id} starred={item.starred} triageStatus={item.triage_status} url={item.canonical_url} />
       </div>
       <Link className="mt-6 inline-flex items-center gap-2 font-mono text-xs uppercase tracking-[0.26em] text-[var(--ink)]" to={`/items/${item.id}`}>
         Open detail

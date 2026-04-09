@@ -19,7 +19,7 @@ class NewsletterMessage:
     thread_id: str
     subject: str
     sender: str
-    published_at: datetime
+    published_at: datetime | None
     text_body: str
     html_body: str
     outbound_links: list[str]
@@ -83,11 +83,7 @@ class GmailConnector:
         subject = headers.get("subject", "Untitled newsletter")
         sender = headers.get("from", "Unknown sender")
         date_header = headers.get("date")
-        published_at = (
-            parsedate_to_datetime(date_header).astimezone(UTC)
-            if date_header
-            else datetime.now(UTC)
-        )
+        published_at = parsedate_to_datetime(date_header).astimezone(UTC) if date_header else None
 
         html_body = self._extract_body(payload, mime_type="text/html")
         text_body = self._extract_body(payload, mime_type="text/plain")

@@ -1,0 +1,2210 @@
+{
+  "days": [
+    {
+      "budget_date": "2026-04-07",
+      "limit_usd": 10.0,
+      "reserved_usd": 0.0,
+      "spent_usd": 0.105757,
+      "updated_at": "2026-04-07T16:50:33.886119Z"
+    },
+    {
+      "budget_date": "2026-04-08",
+      "limit_usd": 10.0,
+      "reserved_usd": 0.0,
+      "spent_usd": 0.00079,
+      "updated_at": "2026-04-08T13:38:20.317685Z"
+    }
+  ],
+  "reservations": [
+    {
+      "actual_cost_usd": 0.00016,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T14:43:53.215641Z",
+      "estimated_cost_usd": 0.001267,
+      "finalized_at": "2026-04-07T14:43:55.893730Z",
+      "id": "fa49693f-e997-49bf-9094-a254f7d36be7",
+      "metadata_json": {
+        "max_output_tokens": 256,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "compose_editorial_note",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000285,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:17:49.564980Z",
+      "estimated_cost_usd": 0.002446,
+      "finalized_at": "2026-04-07T15:17:54.547103Z",
+      "id": "f9e16a9e-e0e0-470d-8c39-15578490c084",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000283,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:17:54.550292Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T15:17:59.571387Z",
+      "id": "981f4d31-8107-47b1-a7b2-d6c1f78c3899",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000614,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:17:59.574051Z",
+      "estimated_cost_usd": 0.002445,
+      "finalized_at": "2026-04-07T15:18:04.082994Z",
+      "id": "4e671ea9-c5e9-434f-8d4c-f9d4a17b8478",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000577,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:18:04.084641Z",
+      "estimated_cost_usd": 0.002415,
+      "finalized_at": "2026-04-07T15:18:08.578555Z",
+      "id": "65082490-3779-4855-9e6f-78e934ff3b08",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000458,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:18:08.580330Z",
+      "estimated_cost_usd": 0.002464,
+      "finalized_at": "2026-04-07T15:18:13.999892Z",
+      "id": "76284acf-3907-4363-88c6-e5bdf4cd81d4",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000782,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:18:14.001975Z",
+      "estimated_cost_usd": 0.002438,
+      "finalized_at": "2026-04-07T15:18:18.919333Z",
+      "id": "7a54ad6f-bddb-4856-9c98-7a4c493020df",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000363,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:18:18.921035Z",
+      "estimated_cost_usd": 0.002429,
+      "finalized_at": "2026-04-07T15:18:24.057603Z",
+      "id": "aa8d6d61-9c29-42b0-8b17-107b9713a3e7",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000777,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:18:24.059488Z",
+      "estimated_cost_usd": 0.002443,
+      "finalized_at": "2026-04-07T15:18:28.645606Z",
+      "id": "99de6a75-7288-475b-a596-6fcc1af458a4",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000285,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:18:28.648437Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T15:18:33.572744Z",
+      "id": "ea700c66-eef0-4560-a5fa-1aff0b14eb94",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000612,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:18:33.575803Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T15:18:37.064108Z",
+      "id": "417120d0-6551-4c48-b950-3cf3be184702",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000843,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:18:37.066229Z",
+      "estimated_cost_usd": 0.002448,
+      "finalized_at": "2026-04-07T15:18:41.386564Z",
+      "id": "af8d139c-72de-4d4d-9f90-c921bcacaca6",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.00081,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:18:41.389041Z",
+      "estimated_cost_usd": 0.002456,
+      "finalized_at": "2026-04-07T15:18:46.731358Z",
+      "id": "c418b1c8-a4aa-459f-b511-762cf6a77062",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000281,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:18:46.736928Z",
+      "estimated_cost_usd": 0.002446,
+      "finalized_at": "2026-04-07T15:18:51.543042Z",
+      "id": "577f77a0-d6b4-4975-92ec-c11893a0e553",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000723,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:18:51.546309Z",
+      "estimated_cost_usd": 0.002457,
+      "finalized_at": "2026-04-07T15:18:56.053715Z",
+      "id": "c59a5aac-255b-46bc-b381-c1f832877dfa",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000538,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:18:56.056926Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T15:19:00.834914Z",
+      "id": "15d7420a-5172-41b6-b94f-7b48d4c53022",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000282,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:19:00.838489Z",
+      "estimated_cost_usd": 0.002454,
+      "finalized_at": "2026-04-07T15:19:05.594921Z",
+      "id": "71614a6c-b70b-4efb-842d-dcf8d6e35218",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000284,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:19:05.598433Z",
+      "estimated_cost_usd": 0.002457,
+      "finalized_at": "2026-04-07T15:19:10.855749Z",
+      "id": "ed7f18f0-e916-4569-878e-6d61ad5200da",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000693,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:19:10.859952Z",
+      "estimated_cost_usd": 0.002424,
+      "finalized_at": "2026-04-07T15:19:15.782504Z",
+      "id": "57d83695-64c9-4aff-8870-704c22880fe1",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000716,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:19:15.786511Z",
+      "estimated_cost_usd": 0.002438,
+      "finalized_at": "2026-04-07T15:19:20.181743Z",
+      "id": "a740ef83-c078-4091-af2b-4563871fca5e",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000517,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:19:20.184344Z",
+      "estimated_cost_usd": 0.002448,
+      "finalized_at": "2026-04-07T15:19:24.362944Z",
+      "id": "d465cdcf-56b6-4ba4-902e-c256e7286922",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000505,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:22:02.405097Z",
+      "estimated_cost_usd": 0.002446,
+      "finalized_at": "2026-04-07T15:22:08.289178Z",
+      "id": "0f15abdc-a752-40d2-aa8a-b6121af38cb2",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000279,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:22:08.291328Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T15:22:13.444851Z",
+      "id": "5bf389eb-ff6b-489b-a3a6-d9396a5450a8",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000716,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:22:13.447916Z",
+      "estimated_cost_usd": 0.002445,
+      "finalized_at": "2026-04-07T15:22:17.506394Z",
+      "id": "c722f6e4-48fd-4ff5-883a-c9b96731a70f",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.00041,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:22:17.508288Z",
+      "estimated_cost_usd": 0.002415,
+      "finalized_at": "2026-04-07T15:22:22.190925Z",
+      "id": "7171e7c6-9cf5-4c27-b2d3-3f6ff765f3ea",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000499,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:22:22.195576Z",
+      "estimated_cost_usd": 0.002464,
+      "finalized_at": "2026-04-07T15:22:27.146910Z",
+      "id": "b9387bd6-270f-4609-b588-a132ba55aa05",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000285,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:22:27.149055Z",
+      "estimated_cost_usd": 0.002438,
+      "finalized_at": "2026-04-07T15:22:31.891991Z",
+      "id": "3f03d136-b7e3-4649-a8f6-d4fcd74d051f",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000692,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:22:31.893476Z",
+      "estimated_cost_usd": 0.002429,
+      "finalized_at": "2026-04-07T15:22:36.293280Z",
+      "id": "ebac20e4-97f2-4858-ac1b-4cba53efecec",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000572,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:22:36.295855Z",
+      "estimated_cost_usd": 0.002443,
+      "finalized_at": "2026-04-07T15:22:40.983476Z",
+      "id": "fd4475ec-8af1-464b-9532-d39db15001a5",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.00067,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:22:40.986458Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T15:22:45.488312Z",
+      "id": "985c5aef-9daf-408e-867d-0192fa17dc66",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000564,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:22:45.491186Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T15:22:48.958884Z",
+      "id": "fe5198d0-9fe1-4abe-b0b4-b75de7d4b708",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000286,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:22:48.960448Z",
+      "estimated_cost_usd": 0.002448,
+      "finalized_at": "2026-04-07T15:22:53.516800Z",
+      "id": "b8bfaa9a-5439-4a2b-8d86-e5ad46c8cf4e",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000811,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:22:53.519749Z",
+      "estimated_cost_usd": 0.002456,
+      "finalized_at": "2026-04-07T15:22:58.014545Z",
+      "id": "d115dec3-d760-4a87-aaa3-edb2a320d750",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000751,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:22:58.017057Z",
+      "estimated_cost_usd": 0.002446,
+      "finalized_at": "2026-04-07T15:23:02.604942Z",
+      "id": "321ce14d-248d-4c31-8889-3fd9d6d75035",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000368,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:23:02.607709Z",
+      "estimated_cost_usd": 0.002457,
+      "finalized_at": "2026-04-07T15:23:07.423120Z",
+      "id": "26d75e57-5d79-44f7-b052-255f3bdfd43f",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000342,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:23:07.425760Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T15:23:11.931912Z",
+      "id": "cab3d702-d96b-456a-826b-bd5b05ebdc1b",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.00028,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:23:11.934340Z",
+      "estimated_cost_usd": 0.002454,
+      "finalized_at": "2026-04-07T15:23:17.106608Z",
+      "id": "d2d5b988-2a16-4a73-8fb4-ba67065dfa93",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000672,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:23:17.109759Z",
+      "estimated_cost_usd": 0.002457,
+      "finalized_at": "2026-04-07T15:23:21.414826Z",
+      "id": "788f15c0-db96-4329-9e77-22d17ecbdbb4",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000734,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:23:21.417988Z",
+      "estimated_cost_usd": 0.002424,
+      "finalized_at": "2026-04-07T15:23:26.191572Z",
+      "id": "2b4e2df6-7983-4f45-9c08-d90aa1321d39",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000624,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:23:26.193693Z",
+      "estimated_cost_usd": 0.002438,
+      "finalized_at": "2026-04-07T15:23:29.878534Z",
+      "id": "59510357-d8c4-48be-9d66-919b95cb4ba1",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000279,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:23:29.880542Z",
+      "estimated_cost_usd": 0.002448,
+      "finalized_at": "2026-04-07T15:23:34.677983Z",
+      "id": "8a586032-8e93-4ae4-b960-6f0d54ff1cfe",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000278,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:25:49.718198Z",
+      "estimated_cost_usd": 0.002446,
+      "finalized_at": "2026-04-07T15:26:02.106511Z",
+      "id": "fa58210a-b1e1-4329-b470-3c3cabb09690",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001063,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:26:02.109409Z",
+      "estimated_cost_usd": 0.006025,
+      "finalized_at": "2026-04-07T15:26:07.026400Z",
+      "id": "b369a6dd-87bb-4271-aad7-69fe61b602e8",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000995,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:26:07.032200Z",
+      "estimated_cost_usd": 0.006051,
+      "finalized_at": "2026-04-07T15:26:11.569143Z",
+      "id": "f8f8e0b6-4f5c-4a6b-91f7-e739aa74cddd",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001145,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:26:11.573046Z",
+      "estimated_cost_usd": 0.006017,
+      "finalized_at": "2026-04-07T15:26:16.294955Z",
+      "id": "5a9964f8-39b2-4bb7-a004-0bdfb124427e",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000632,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:26:16.297426Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T15:26:20.264471Z",
+      "id": "4e238edf-5b89-4379-84ab-a569dc18cb1f",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000286,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:26:20.267569Z",
+      "estimated_cost_usd": 0.002445,
+      "finalized_at": "2026-04-07T15:26:24.890377Z",
+      "id": "8ca7bebb-e0aa-431d-b94a-ed4ec29bbaf8",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000682,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:26:24.892099Z",
+      "estimated_cost_usd": 0.002415,
+      "finalized_at": "2026-04-07T15:26:29.607645Z",
+      "id": "a0503798-82f8-40e6-adbc-cb219ce088c4",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.00029,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:26:29.609703Z",
+      "estimated_cost_usd": 0.002464,
+      "finalized_at": "2026-04-07T15:26:34.337521Z",
+      "id": "c76390a7-fb79-4ce2-b84d-0f572e2f056f",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000813,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:26:34.340211Z",
+      "estimated_cost_usd": 0.004811,
+      "finalized_at": "2026-04-07T15:26:39.320155Z",
+      "id": "3f87bbca-63ca-4bb6-8e13-82fb49bad6b4",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001077,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:26:39.323239Z",
+      "estimated_cost_usd": 0.006053,
+      "finalized_at": "2026-04-07T15:26:44.277742Z",
+      "id": "54205da3-b41d-49dd-b898-0ac882faec7a",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000792,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:26:44.282145Z",
+      "estimated_cost_usd": 0.002438,
+      "finalized_at": "2026-04-07T15:26:48.480130Z",
+      "id": "2d765326-5f3e-4a01-9b3b-16bb1fa5eaf6",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000277,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:26:48.482284Z",
+      "estimated_cost_usd": 0.002429,
+      "finalized_at": "2026-04-07T15:26:53.289071Z",
+      "id": "e81d3897-94b7-4607-8589-add491ee1f6c",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000499,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:26:53.291437Z",
+      "estimated_cost_usd": 0.002443,
+      "finalized_at": "2026-04-07T15:26:57.790513Z",
+      "id": "e924a471-16b2-476f-91ba-484a0076d05a",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000648,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:26:57.793141Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T15:27:02.129702Z",
+      "id": "87a747b9-b485-4768-a72e-12d12b28944e",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000998,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:27:02.132896Z",
+      "estimated_cost_usd": 0.006075,
+      "finalized_at": "2026-04-07T15:27:07.159844Z",
+      "id": "7b2f97cc-ef25-4bfd-bb65-6b814b368b1e",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001021,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:27:07.162265Z",
+      "estimated_cost_usd": 0.006014,
+      "finalized_at": "2026-04-07T15:27:12.163270Z",
+      "id": "ebd227d7-d070-4b02-9c21-eb6e7033a592",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000662,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:27:12.168541Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T15:27:16.183684Z",
+      "id": "37207ff7-3eb1-4b3c-821c-4aa4fd3e2b5a",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001074,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:27:16.186307Z",
+      "estimated_cost_usd": 0.006038,
+      "finalized_at": "2026-04-07T15:27:20.591013Z",
+      "id": "1d5af087-e9be-4da9-af3e-9f789c9e31a9",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000657,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:27:20.593943Z",
+      "estimated_cost_usd": 0.002448,
+      "finalized_at": "2026-04-07T15:27:25.273237Z",
+      "id": "8aefb0f2-738c-4b33-934c-9533e69f960e",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.0009,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:27:25.275990Z",
+      "estimated_cost_usd": 0.002456,
+      "finalized_at": "2026-04-07T15:27:29.977268Z",
+      "id": "92c39d4b-6167-41b4-9304-42979dd66de4",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000675,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:27:29.981853Z",
+      "estimated_cost_usd": 0.002446,
+      "finalized_at": "2026-04-07T15:27:33.966374Z",
+      "id": "b2508f01-0548-4263-8d26-4a38fc496440",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000283,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:27:33.968948Z",
+      "estimated_cost_usd": 0.002457,
+      "finalized_at": "2026-04-07T15:27:38.592734Z",
+      "id": "9d5884c9-3db5-454d-8007-4397d2619bee",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000586,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:27:38.596167Z",
+      "estimated_cost_usd": 0.003801,
+      "finalized_at": "2026-04-07T15:27:43.063525Z",
+      "id": "7e2e3ed3-ce68-4004-996b-649885cd2def",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000555,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:27:43.065657Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T15:27:47.596432Z",
+      "id": "806dd255-dfdb-4203-858e-6a78d6008e60",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001087,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:27:47.599384Z",
+      "estimated_cost_usd": 0.006029,
+      "finalized_at": "2026-04-07T15:27:52.179972Z",
+      "id": "0b6a32af-4a3f-4827-8315-6320d6bc3121",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001105,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:27:52.193153Z",
+      "estimated_cost_usd": 0.006059,
+      "finalized_at": "2026-04-07T15:27:57.196769Z",
+      "id": "f5dd7796-db3d-4060-9d4a-8be861ad756c",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000282,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:27:57.199006Z",
+      "estimated_cost_usd": 0.002454,
+      "finalized_at": "2026-04-07T15:28:01.574244Z",
+      "id": "91fac0e7-c879-4822-99de-ff4bdb773218",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000664,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:28:01.576754Z",
+      "estimated_cost_usd": 0.002457,
+      "finalized_at": "2026-04-07T15:28:06.423159Z",
+      "id": "29ea8a04-6d42-41b8-b681-05ea419d2e64",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000611,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:28:06.425578Z",
+      "estimated_cost_usd": 0.002424,
+      "finalized_at": "2026-04-07T15:28:11.436467Z",
+      "id": "1312ca41-0ead-4b93-a7b6-a1da486a6986",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000711,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:28:11.438767Z",
+      "estimated_cost_usd": 0.002438,
+      "finalized_at": "2026-04-07T15:28:17.954514Z",
+      "id": "ddf95bd7-ad85-40d1-bde8-6b5c2f624795",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000723,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:28:17.956560Z",
+      "estimated_cost_usd": 0.002448,
+      "finalized_at": "2026-04-07T15:28:23.249473Z",
+      "id": "60aa4271-5897-40ee-928b-732516e6cf3a",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001134,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:28:23.254038Z",
+      "estimated_cost_usd": 0.006012,
+      "finalized_at": "2026-04-07T15:28:28.199240Z",
+      "id": "5bab3320-80f1-43ce-b4b1-c9f1e242d8d4",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001588,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:28:28.202235Z",
+      "estimated_cost_usd": 0.006023,
+      "finalized_at": "2026-04-07T15:28:33.264317Z",
+      "id": "aec01193-f2b4-425c-b698-60a9eff19cf2",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000346,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:30:20.792460Z",
+      "estimated_cost_usd": 0.002446,
+      "finalized_at": "2026-04-07T15:30:27.003302Z",
+      "id": "6f309d14-e7b2-4c4a-8b30-578664d24554",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001063,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:30:27.005355Z",
+      "estimated_cost_usd": 0.006025,
+      "finalized_at": "2026-04-07T15:30:31.981391Z",
+      "id": "0c6937a7-7bab-416a-af58-6dd78c67df34",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000991,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:30:31.983414Z",
+      "estimated_cost_usd": 0.006051,
+      "finalized_at": "2026-04-07T15:30:36.432902Z",
+      "id": "e6d871ce-e4af-4ed0-a6c7-99ac7a326499",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001149,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:30:36.436737Z",
+      "estimated_cost_usd": 0.006017,
+      "finalized_at": "2026-04-07T15:30:41.640467Z",
+      "id": "dd6826a5-7719-4f31-bf52-9b47a202ba6a",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000578,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:30:41.642469Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T15:30:46.657437Z",
+      "id": "6b69934b-de6e-4ba2-a5be-f710b77dde44",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000633,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:30:46.660170Z",
+      "estimated_cost_usd": 0.002445,
+      "finalized_at": "2026-04-07T15:30:50.619434Z",
+      "id": "43998e26-c959-4277-be44-a3f24909ef49",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.00028,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:30:50.622325Z",
+      "estimated_cost_usd": 0.002415,
+      "finalized_at": "2026-04-07T15:30:56.704149Z",
+      "id": "21ef6ff2-36e6-4923-aa3a-eaea4f4f5dae",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.00036,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:30:56.707359Z",
+      "estimated_cost_usd": 0.002464,
+      "finalized_at": "2026-04-07T15:31:01.575737Z",
+      "id": "f13d8b52-2b4e-4f62-aa88-7079cfc2813f",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000818,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:31:01.578358Z",
+      "estimated_cost_usd": 0.004811,
+      "finalized_at": "2026-04-07T15:31:06.558507Z",
+      "id": "9cb36723-9e1b-41ab-90af-9bb714b968b8",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001579,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:31:06.563058Z",
+      "estimated_cost_usd": 0.006053,
+      "finalized_at": "2026-04-07T15:31:11.643590Z",
+      "id": "d77cdffd-59b7-4fef-bc36-9114e503e40c",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000285,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:31:11.646071Z",
+      "estimated_cost_usd": 0.002438,
+      "finalized_at": "2026-04-07T15:31:16.649328Z",
+      "id": "1b0cb983-08f5-4985-a9b4-73b46891be62",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000484,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:31:16.652270Z",
+      "estimated_cost_usd": 0.002429,
+      "finalized_at": "2026-04-07T15:31:21.655600Z",
+      "id": "33b8d804-f414-4e86-b7fc-1d89b431d627",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000506,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:31:21.659023Z",
+      "estimated_cost_usd": 0.002443,
+      "finalized_at": "2026-04-07T15:31:26.268938Z",
+      "id": "d8231d54-0254-4f0c-8bb2-cf54e69a6c07",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000923,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:31:26.271383Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T15:31:30.946939Z",
+      "id": "b3d93217-3d19-46bd-aded-9cbd03b6662d",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000993,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:31:30.949447Z",
+      "estimated_cost_usd": 0.006075,
+      "finalized_at": "2026-04-07T15:31:36.411862Z",
+      "id": "1ec70619-9acc-4232-9ff1-b922c28dd923",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001014,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:31:36.415607Z",
+      "estimated_cost_usd": 0.006014,
+      "finalized_at": "2026-04-07T15:31:41.101558Z",
+      "id": "8039bae0-7147-4d76-a4d8-c52919743228",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000638,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:31:41.105655Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T15:31:45.778894Z",
+      "id": "155a358e-8c8a-4bbf-9688-0c65344c54db",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001071,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:31:45.782279Z",
+      "estimated_cost_usd": 0.006038,
+      "finalized_at": "2026-04-07T15:31:50.354622Z",
+      "id": "61ffbd8e-68f5-4386-b9f1-a3bf38209e57",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000989,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:31:50.357194Z",
+      "estimated_cost_usd": 0.002448,
+      "finalized_at": "2026-04-07T15:31:55.023651Z",
+      "id": "f8a04ca8-00e5-49da-867c-9edbad1b17f7",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000744,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:31:55.026799Z",
+      "estimated_cost_usd": 0.002456,
+      "finalized_at": "2026-04-07T15:31:59.578282Z",
+      "id": "390f0568-8b10-43c7-a237-fa8ced327fcc",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000682,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:31:59.581618Z",
+      "estimated_cost_usd": 0.002446,
+      "finalized_at": "2026-04-07T15:32:03.369299Z",
+      "id": "e3247768-3d33-47ed-9f0e-fac750b32a20",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000645,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:32:03.371834Z",
+      "estimated_cost_usd": 0.002457,
+      "finalized_at": "2026-04-07T15:32:07.913904Z",
+      "id": "ff05dcf8-a76c-4c7f-9617-4a243b0d1625",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001208,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:32:07.917576Z",
+      "estimated_cost_usd": 0.003801,
+      "finalized_at": "2026-04-07T15:32:12.295541Z",
+      "id": "0248426c-1413-4afb-a739-0a26f2b9fe25",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000688,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:32:12.298021Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T15:32:16.476487Z",
+      "id": "6ca08171-012b-48bb-9deb-1d85bd8b8ef3",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001083,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:32:16.478631Z",
+      "estimated_cost_usd": 0.006029,
+      "finalized_at": "2026-04-07T15:32:21.578061Z",
+      "id": "ad7119a0-d9a6-466d-985b-bf561a433be6",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001102,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:32:21.582053Z",
+      "estimated_cost_usd": 0.006059,
+      "finalized_at": "2026-04-07T15:32:26.802794Z",
+      "id": "ab75691d-23b2-471d-b4ad-a337cc33a5fa",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000722,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:32:26.806694Z",
+      "estimated_cost_usd": 0.002454,
+      "finalized_at": "2026-04-07T15:32:32.000970Z",
+      "id": "07e0b76f-1e5a-483d-af18-dddf7f35e689",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.00042,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:32:32.003774Z",
+      "estimated_cost_usd": 0.002457,
+      "finalized_at": "2026-04-07T15:32:36.661269Z",
+      "id": "40d9fb9f-a6c3-4016-905c-3f3f7a264419",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000281,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:32:36.663847Z",
+      "estimated_cost_usd": 0.002424,
+      "finalized_at": "2026-04-07T15:32:42.238237Z",
+      "id": "3674d1f2-fd95-42fa-967b-2111d7b4dec9",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000834,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:32:42.242175Z",
+      "estimated_cost_usd": 0.002438,
+      "finalized_at": "2026-04-07T15:32:47.566410Z",
+      "id": "fb73a285-ddf5-4a5c-b92e-52ef983c95af",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.00031,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:32:47.569624Z",
+      "estimated_cost_usd": 0.002448,
+      "finalized_at": "2026-04-07T15:32:52.623000Z",
+      "id": "f5732950-2efc-42d1-a56c-840a9a1409bb",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001139,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:32:52.628814Z",
+      "estimated_cost_usd": 0.006012,
+      "finalized_at": "2026-04-07T15:32:57.590084Z",
+      "id": "778b7e4c-4e02-4719-99d7-148e317f8b2d",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001297,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T15:32:57.595099Z",
+      "estimated_cost_usd": 0.006023,
+      "finalized_at": "2026-04-07T15:33:02.389329Z",
+      "id": "d8490370-617a-4892-9fec-cbd3918fa678",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.00028,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:47:36.431434Z",
+      "estimated_cost_usd": 0.002446,
+      "finalized_at": "2026-04-07T16:47:41.340807Z",
+      "id": "d5426a4c-267d-44c0-bba1-335b0f1d950b",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001067,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:47:41.347124Z",
+      "estimated_cost_usd": 0.006025,
+      "finalized_at": "2026-04-07T16:47:46.086584Z",
+      "id": "37220d4a-9b9a-4cd8-8a44-c00c88d56498",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001831,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:47:46.092681Z",
+      "estimated_cost_usd": 0.006051,
+      "finalized_at": "2026-04-07T16:47:50.843984Z",
+      "id": "e8d10ed8-1435-4a60-8f1d-c9a5eabae691",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001149,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:47:50.850530Z",
+      "estimated_cost_usd": 0.006017,
+      "finalized_at": "2026-04-07T16:47:56.003349Z",
+      "id": "4e94d11a-d134-4052-90d4-ebe26b24b9a7",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000283,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:47:56.007627Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T16:48:00.545213Z",
+      "id": "40834212-815d-4a9d-b4ac-ac3be4f44cb7",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000594,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:48:00.550067Z",
+      "estimated_cost_usd": 0.002445,
+      "finalized_at": "2026-04-07T16:48:05.068821Z",
+      "id": "1ec96768-7d23-440e-9441-467b67d42ec7",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000616,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:48:05.073188Z",
+      "estimated_cost_usd": 0.002415,
+      "finalized_at": "2026-04-07T16:48:09.473248Z",
+      "id": "2a9cbe09-f6a8-4e2f-a1c6-75d9aed5db72",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.00029,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:48:09.478958Z",
+      "estimated_cost_usd": 0.002464,
+      "finalized_at": "2026-04-07T16:48:14.100072Z",
+      "id": "5665d7bb-a774-4f05-a065-f599f5f49866",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000816,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:48:14.104469Z",
+      "estimated_cost_usd": 0.004811,
+      "finalized_at": "2026-04-07T16:48:18.923967Z",
+      "id": "2ba98c28-3db7-40d9-b44e-045823be96f4",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001075,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:48:18.929501Z",
+      "estimated_cost_usd": 0.006053,
+      "finalized_at": "2026-04-07T16:48:23.561223Z",
+      "id": "8c06c032-8e9c-4389-a60b-d3e89822e37f",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000852,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:48:23.563882Z",
+      "estimated_cost_usd": 0.002438,
+      "finalized_at": "2026-04-07T16:48:27.842820Z",
+      "id": "004d447c-7a6d-4c38-ad22-f084181f5e72",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000376,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:48:27.847335Z",
+      "estimated_cost_usd": 0.002429,
+      "finalized_at": "2026-04-07T16:48:32.063196Z",
+      "id": "f679d5cb-b6af-4595-a25b-7c4659f0ebaa",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000443,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:48:32.067454Z",
+      "estimated_cost_usd": 0.002443,
+      "finalized_at": "2026-04-07T16:48:36.474548Z",
+      "id": "ef231291-e014-4f56-830f-6fda4b0efd60",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.0006,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:48:36.480463Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T16:48:41.004246Z",
+      "id": "b4fd208d-0d98-4fbb-afd0-9141e1cf19a5",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000998,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:48:41.010194Z",
+      "estimated_cost_usd": 0.006075,
+      "finalized_at": "2026-04-07T16:48:45.930521Z",
+      "id": "58271ee7-6a47-4c69-a467-95a0bf604140",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001014,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:48:45.936928Z",
+      "estimated_cost_usd": 0.006014,
+      "finalized_at": "2026-04-07T16:48:50.900737Z",
+      "id": "38eb42aa-109f-4304-ac42-057bb715ed55",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000682,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:48:50.905565Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T16:48:54.693465Z",
+      "id": "d8632c2a-09ab-4637-afd8-07229c05ee47",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001487,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:48:54.699215Z",
+      "estimated_cost_usd": 0.006038,
+      "finalized_at": "2026-04-07T16:48:59.643825Z",
+      "id": "56cabe56-d36c-439e-83e7-cf8cccfde5e1",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000395,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:48:59.649235Z",
+      "estimated_cost_usd": 0.002448,
+      "finalized_at": "2026-04-07T16:49:04.327104Z",
+      "id": "a77e0d14-b35b-4dbb-9a38-c181536a3885",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000771,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:49:04.332370Z",
+      "estimated_cost_usd": 0.002456,
+      "finalized_at": "2026-04-07T16:49:08.769962Z",
+      "id": "284cfdc9-a668-44b8-a8f2-8487777aea0d",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000801,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:49:08.775609Z",
+      "estimated_cost_usd": 0.002446,
+      "finalized_at": "2026-04-07T16:49:13.164804Z",
+      "id": "024f85c2-07d4-4bc6-8a9a-be6b9486d1fd",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000287,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:49:13.170058Z",
+      "estimated_cost_usd": 0.002457,
+      "finalized_at": "2026-04-07T16:49:17.951716Z",
+      "id": "6975d787-e1e5-4d97-a01d-c04a575a10a9",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000586,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:49:17.957688Z",
+      "estimated_cost_usd": 0.003801,
+      "finalized_at": "2026-04-07T16:49:22.639198Z",
+      "id": "ed1886d5-9960-45d7-8d91-6eda77cf66e0",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000665,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:49:22.645042Z",
+      "estimated_cost_usd": 0.002442,
+      "finalized_at": "2026-04-07T16:49:27.718873Z",
+      "id": "48f92770-57a0-4c03-9a9a-1e190be3973c",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001083,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:49:27.725217Z",
+      "estimated_cost_usd": 0.006029,
+      "finalized_at": "2026-04-07T16:49:32.530099Z",
+      "id": "c1fe6b8f-a97c-4e43-9466-964a04f86e24",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.002066,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:49:32.536377Z",
+      "estimated_cost_usd": 0.006059,
+      "finalized_at": "2026-04-07T16:49:37.737420Z",
+      "id": "d20fea58-8b03-4e24-b1d2-531f3c5a4f75",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000473,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:49:37.740577Z",
+      "estimated_cost_usd": 0.002454,
+      "finalized_at": "2026-04-07T16:49:42.081898Z",
+      "id": "2ee0d616-ca03-40f7-85b7-0117a9754f39",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000374,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:49:42.087291Z",
+      "estimated_cost_usd": 0.002457,
+      "finalized_at": "2026-04-07T16:49:46.342680Z",
+      "id": "bd4bdf0d-2340-4a53-a985-c84959737c4e",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000279,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:49:46.356114Z",
+      "estimated_cost_usd": 0.002424,
+      "finalized_at": "2026-04-07T16:49:51.206143Z",
+      "id": "263eb650-fc07-4a82-9a1a-54eebdb130d6",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000617,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:49:51.211614Z",
+      "estimated_cost_usd": 0.002438,
+      "finalized_at": "2026-04-07T16:49:55.332699Z",
+      "id": "011ee2fb-60bb-497e-8bd2-6fbbd0e116d1",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.000688,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:49:55.336925Z",
+      "estimated_cost_usd": 0.002448,
+      "finalized_at": "2026-04-07T16:49:59.661212Z",
+      "id": "f59b7b2f-0b98-481a-9e72-f2474eb91e07",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001143,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:49:59.668208Z",
+      "estimated_cost_usd": 0.006012,
+      "finalized_at": "2026-04-07T16:50:04.326885Z",
+      "id": "46c35afe-666c-470c-84ff-2b6bcd393e2d",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001055,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:50:04.332644Z",
+      "estimated_cost_usd": 0.006023,
+      "finalized_at": "2026-04-07T16:50:09.246603Z",
+      "id": "fe1a7f59-9cf4-43e2-89e4-60676eebe706",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.002196,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:50:09.250871Z",
+      "estimated_cost_usd": 0.006059,
+      "finalized_at": "2026-04-07T16:50:14.266435Z",
+      "id": "8a673b67-3887-4bd3-9528-e40cdfd27bf0",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001524,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:50:14.271382Z",
+      "estimated_cost_usd": 0.006069,
+      "finalized_at": "2026-04-07T16:50:19.123808Z",
+      "id": "71be212c-68da-4bba-9cc8-50dfeda5f6f4",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.00149,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:50:19.128206Z",
+      "estimated_cost_usd": 0.006069,
+      "finalized_at": "2026-04-07T16:50:23.824902Z",
+      "id": "1fcd7369-e39a-484b-a0f2-e13d316e481a",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001415,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:50:23.832723Z",
+      "estimated_cost_usd": 0.00607,
+      "finalized_at": "2026-04-07T16:50:28.852818Z",
+      "id": "595cf212-df45-4386-8501-c25bcb715389",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.001526,
+      "budget_date": "2026-04-07",
+      "created_at": "2026-04-07T16:50:28.861524Z",
+      "estimated_cost_usd": 0.006065,
+      "finalized_at": "2026-04-07T16:50:33.886132Z",
+      "id": "d65b5685-8d79-4a55-9160-8dc816c229b6",
+      "metadata_json": {
+        "max_output_tokens": 700,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "summarize_item",
+      "provider": "gemini",
+      "state": "consumed"
+    },
+    {
+      "actual_cost_usd": 0.00079,
+      "budget_date": "2026-04-08",
+      "created_at": "2026-04-08T13:38:17.493397Z",
+      "estimated_cost_usd": 0.003912,
+      "finalized_at": "2026-04-08T13:38:20.317691Z",
+      "id": "ef6a9828-7517-44bf-b7f5-76aa022ca784",
+      "metadata_json": {
+        "max_output_tokens": 256,
+        "model": "gemini-2.5-flash"
+      },
+      "operation": "compose_editorial_note",
+      "provider": "gemini",
+      "state": "consumed"
+    }
+  ]
+}

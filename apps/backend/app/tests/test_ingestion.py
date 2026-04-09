@@ -435,6 +435,85 @@ def test_ingest_payload_reports_old_and_new_affected_edition_days_when_source_da
         assert updated.affected_edition_days == [date(2026, 3, 27), date(2026, 3, 28)]
 
 
+def test_ingest_payload_uses_identity_hash_for_typo_fix_updates_without_links(
+    client: TestClient,
+) -> None:
+    with get_session_factory()() as db:
+        source = Source(
+            type=SourceType.RSS,
+            name="Identity Feed",
+            url="https://example.com/identity.xml",
+            priority=70,
+            active=True,
+            tags=["rss"],
+        )
+        db.add(source)
+        db.commit()
+        db.refresh(source)
+
+        service = IngestionService(db)
+        first = service._ingest_payload_with_result(
+            source=source,
+            title="Identity keyed article",
+            canonical_url=f"{source.id}-0",
+            authors=["Researcher"],
+            published_at=datetime(2026, 3, 27, 8, 0, tzinfo=UTC),
+            cleaned_text="This summary contains teh original typo.",
+            raw_payload={
+                "feed_entry": {
+                    "id": "feed-entry-1",
+                    "title": "Identity keyed article",
+                    "link": "",
+                    "published": "2026-03-27T08:00:00+00:00",
+                    "summary": "This summary contains teh original typo.",
+                }
+            },
+            outbound_links=[],
+            extraction_confidence=0.9,
+            metadata_json={"feed_entry_id": "feed-entry-1"},
+            content_type=ContentType.ARTICLE,
+        )
+        original_item_id = first.item.id
+        original_identity_hash = first.item.identity_hash
+        original_revision_hash = first.item.content_hash
+        original_canonical_url = first.item.canonical_url
+
+        updated = service._ingest_payload_with_result(
+            source=source,
+            title="Identity keyed article",
+            canonical_url=f"{source.id}-7",
+            authors=["Researcher"],
+            published_at=datetime(2026, 3, 27, 8, 0, tzinfo=UTC),
+            cleaned_text="This summary contains the corrected typo.",
+            raw_payload={
+                "feed_entry": {
+                    "id": "feed-entry-1",
+                    "title": "Identity keyed article",
+                    "link": "",
+                    "published": "2026-03-27T08:00:00+00:00",
+                    "summary": "This summary contains the corrected typo.",
+                }
+            },
+            outbound_links=[],
+            extraction_confidence=0.9,
+            metadata_json={"feed_entry_id": "feed-entry-1"},
+            content_type=ContentType.ARTICLE,
+        )
+
+        items = db.scalars(select(Item).where(Item.source_id == source.id)).all()
+
+        assert updated.created is False
+        assert updated.item.id == original_item_id
+        assert len(items) == 1
+        assert original_identity_hash is not None
+        assert updated.item.identity_hash == original_identity_hash
+        assert updated.item.content_hash != original_revision_hash
+        assert updated.item.canonical_url == original_canonical_url
+        assert updated.item.canonical_url == f"source://{source.id}/{original_identity_hash}"
+        assert updated.item.content is not None
+        assert updated.item.content.cleaned_text == "This summary contains the corrected typo."
+
+
 def test_ingest_gmail_source_supports_app_password_connection(
     client: TestClient,
     monkeypatch,
@@ -1051,3 +1130,81 @@ def test_ingest_gmail_source_reuses_original_permalink_for_first_fact_and_is_ide
         assert first_run.items[0].outcome == "updated"
         assert first_run.items[1].outcome == "created"
         assert [item.outcome for item in second_run.items] == ["updated", "updated"]
+
+
+def test_ingest_gmail_source_handles_missing_message_date_deterministically(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    class StubOauthConnector:
+        def __init__(self, access_token: str) -> None:
+            assert access_token == "gmail-access-token"
+
+        def list_newsletters(self, senders=None, labels=None, raw_query=None, max_results=20):
+            return [
+                NewsletterMessage(
+                    message_id="msg-undated",
+                    thread_id="thread-undated",
+                    subject="TLDR AI",
+                    sender="TLDR AI <hi@tldrnewsletter.com>",
+                    published_at=None,
+                    text_body="A new model release focuses on lower-latency tool use.",
+                    html_body="<p>Newsletter body.</p>",
+                    outbound_links=["https://example.com/model"],
+                    permalink="https://mail.google.com/mail/u/0/#inbox/msg-undated",
+                )
+            ]
+
+    monkeypatch.setattr("app.services.ingestion.GmailConnector", StubOauthConnector)
+    monkeypatch.setattr(
+        "app.services.ingestion.LLMClient.split_newsletter_message",
+        lambda self, newsletter: {
+            "generation_mode": "remote",
+            "facts": [
+                {
+                    "headline": "Model launch to watch",
+                    "summary": "A new model release focuses on lower-latency tool use.",
+                    "why_it_matters": "faster tool use, lower latency",
+                }
+            ],
+        },
+    )
+
+    with get_session_factory()() as db:
+        ConnectionService(db).store_connection(
+            provider=ConnectionProvider.GMAIL,
+            label="Primary Gmail",
+            payload={
+                "access_token": "gmail-access-token",
+                "refresh_token": "gmail-refresh-token",
+                "expires_at": "2030-01-01T00:00:00+00:00",
+                "auth_mode": "oauth",
+            },
+            metadata_json={"auth_mode": "oauth", "connected_email": "reader@example.com"},
+            status=ConnectionStatus.CONNECTED,
+        )
+        source = Source(
+            type=SourceType.GMAIL,
+            name="TLDR AI",
+            query="newsletter@tldrnewsletter.com",
+            priority=76,
+            active=True,
+            tags=["newsletter", "ai"],
+        )
+        db.add(source)
+        db.commit()
+        db.refresh(source)
+
+        service = IngestionService(db)
+        summary = service._ingest_gmail_source(source)
+        item = db.scalar(
+            select(Item).where(
+                Item.canonical_url == "https://mail.google.com/mail/u/0/#inbox/msg-undated"
+            )
+        )
+
+        assert summary.status == RunStatus.SUCCEEDED
+        assert len(summary.items) == 1
+        assert item is not None
+        assert item.published_at is None
+        assert item.title == "Model launch to watch"

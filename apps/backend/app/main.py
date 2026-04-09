@@ -3,15 +3,15 @@ from __future__ import annotations
 import logging
 import secrets
 from contextlib import asynccontextmanager
+from pathlib import Path
 from time import perf_counter
 from urllib.parse import urlsplit
 
 import sentry_sdk
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from sentry_sdk.integrations.fastapi import FastApiIntegration
-from sqlalchemy import text
 
 from app.api.router import api_router
 from app.core.config import Settings, get_settings
@@ -29,9 +29,8 @@ from app.core.metrics import (
     record_http_request_started,
     render_metrics,
 )
-from app.db.base import Base
-from app.db.session import get_engine, get_session_factory
-from app.services.seeding import SeedService
+from app.db.session import ensure_schema
+from app.vault.store import VaultStore
 
 UNSAFE_HTTP_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 ORIGIN_PROTECTED_GET_PATH_SUFFIXES = {"/connections/gmail/oauth/start"}
@@ -136,29 +135,18 @@ def create_app() -> FastAPI:
         logger.info(
             "app.startup.begin",
             extra={
-                "auto_create_schema": settings.auto_create_schema,
-                "seed_demo_data": settings.seed_demo_data,
                 "timezone": settings.timezone,
                 "json_logging": settings.use_json_logging,
                 "metrics_enabled": settings.metrics_enabled,
                 "metrics_path": settings.metrics_path,
+                "vault_root_dir": str(settings.vault_root_dir),
             },
         )
         try:
-            if settings.auto_create_schema:
-                engine = get_engine()
-                if engine.dialect.name == "postgresql":
-                    with engine.begin() as connection:
-                        connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-                Base.metadata.create_all(bind=engine)
-                logger.info(
-                    "app.startup.schema_ready",
-                    extra={"database_dialect": engine.dialect.name},
-                )
-            if settings.seed_demo_data:
-                with get_session_factory()() as db:
-                    SeedService(db).ensure_demo_state()
-                logger.info("app.startup.seed_ready")
+            ensure_schema()
+            logger.info("app.startup.schema_ready", extra={"auto_create_schema": settings.auto_create_schema})
+            VaultStore().ensure_layout()
+            logger.info("app.startup.vault_ready")
             logger.info("app.startup.complete")
             yield
         except Exception:
@@ -311,9 +299,53 @@ def create_app() -> FastAPI:
 
     app.include_router(api_router, prefix=settings.api_prefix)
 
-    @app.get("/")
-    def root() -> dict[str, str]:
-        return {"name": settings.app_name, "api": f"{settings.api_prefix}/health"}
+    def local_app_index() -> Path | None:
+        index_path = settings.web_dist_dir / "index.html"
+        return index_path if index_path.exists() else None
+
+    def local_app_config_payload() -> dict[str, object]:
+        return {
+            "mode": settings.local_web_mode,
+            "apiBaseUrl": settings.api_prefix,
+            "pairedLocalUrl": settings.local_server_base_url.rstrip("/"),
+            "hostedViewerUrl": settings.hosted_viewer_url,
+            "cloudKit": None,
+        }
+
+    if local_app_index() is not None:
+
+        @app.get("/app-config.json", include_in_schema=False)
+        def local_app_config() -> JSONResponse:
+            return JSONResponse(local_app_config_payload())
+
+        @app.get("/")
+        def serve_root_app() -> FileResponse:
+            index_path = local_app_index()
+            assert index_path is not None
+            return FileResponse(index_path)
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        def serve_local_app(full_path: str) -> FileResponse:
+            if full_path.startswith("api/") or full_path == "api":
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+            if full_path == settings.metrics_path.lstrip("/"):
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+            asset_path = settings.web_dist_dir / full_path
+            if asset_path.is_file():
+                return FileResponse(asset_path)
+            index_path = local_app_index()
+            assert index_path is not None
+            return FileResponse(index_path)
+
+    else:
+
+        @app.get("/")
+        def root() -> dict[str, str]:
+            return {
+                "name": settings.app_name,
+                "api": f"{settings.api_prefix}/health",
+                "vault_root_dir": str(settings.vault_root_dir),
+            }
 
     return app
 

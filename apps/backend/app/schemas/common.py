@@ -1,6 +1,6 @@
 from datetime import date, datetime, time
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ORMModel(BaseModel):
@@ -25,3 +25,18 @@ class TimePreference(BaseModel):
 class DateEnvelope(BaseModel):
     date: date
     generated_at: datetime
+
+
+class AlphaXivSimilarPaperRead(BaseModel):
+    title: str
+    canonical_url: str
+    app_item_id: str | None = None
+    authors: list[str] = Field(default_factory=list)
+    short_summary: str | None = None
+
+
+class AlphaXivPaperRead(BaseModel):
+    short_summary: str | None = None
+    filed_text: str | None = None
+    audio_url: str | None = None
+    similar_papers: list[AlphaXivSimilarPaperRead] = Field(default_factory=list)

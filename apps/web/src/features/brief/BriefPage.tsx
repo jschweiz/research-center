@@ -13,6 +13,7 @@ import type { AppShellOutletContext } from "../../layout/AppShell";
 
 const contentTypeLabel: Record<DigestEntry["item"]["content_type"], string> = {
   article: "Article",
+  news: "News",
   paper: "Paper",
   newsletter: "Newsletter",
   post: "Post",

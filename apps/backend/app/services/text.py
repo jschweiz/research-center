@@ -7,6 +7,8 @@ from typing import Any
 LEADING_PAPER_ID_RE = re.compile(r"^\s*(?:\[(?=[^\]\s]{1,48}\])[-A-Za-z0-9._:/]+\]\s*)+")
 ARXIV_ID_RE = re.compile(r"^(?:arxiv:)?\d{4}\.\d{4,5}(?:v\d+)?$", re.IGNORECASE)
 SIGNAL_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:[-/][A-Za-z0-9]+)*")
+SUMMARY_SENTENCE_BREAK_RE = re.compile(r"(?<=[.!?])\s+")
+SUMMARY_URL_RE = re.compile(r"https?://\S+")
 WHY_IT_MATTERS_BOILERPLATE_RE = re.compile(
     r"^\s*this surfaced because it intersects with .*?\b(?:and|but)\b\s*",
     re.IGNORECASE,
@@ -138,6 +140,28 @@ def compact_signal_note(
     return fallback[:120] or None
 
 
+def fallback_short_summary(
+    *,
+    summary: str | None,
+    text: str | None,
+    title: str,
+    max_chars: int = 240,
+) -> str | None:
+    normalized_summary = normalize_whitespace(summary)
+    if normalized_summary:
+        return _truncate_summary(normalized_summary, max_chars=max_chars)
+
+    normalized_text = _summary_candidate_text(text)
+    if normalized_text:
+        sentence = SUMMARY_SENTENCE_BREAK_RE.split(normalized_text, maxsplit=1)[0]
+        return _truncate_summary(sentence, max_chars=max_chars)
+
+    normalized_title = normalize_whitespace(title)
+    if normalized_title:
+        return _truncate_summary(normalized_title, max_chars=max_chars)
+    return None
+
+
 def extract_signal_phrases(texts: Iterable[str], *, max_phrases: int = 3, max_words_per_phrase: int = 2) -> list[str]:
     phrases: list[str] = []
     seen: set[str] = set()
@@ -185,6 +209,22 @@ def _strip_signal_boilerplate(value: str) -> str:
 
 def _strip_terminal_punctuation(value: str) -> str:
     return value.rstrip(" .,:;!?")
+
+
+def _summary_candidate_text(value: str | None) -> str:
+    cleaned = SUMMARY_URL_RE.sub("", normalize_whitespace(value))
+    cleaned = re.sub(r"\[[^\]]+\]\([^)]+\)", "", cleaned)
+    return cleaned.strip(" -")
+
+
+def _truncate_summary(value: str, *, max_chars: int) -> str:
+    normalized = _strip_terminal_punctuation(normalize_whitespace(value))
+    if len(normalized) <= max_chars:
+        return normalized
+    trimmed = normalized[: max_chars + 1].rsplit(" ", 1)[0]
+    if not trimmed:
+        trimmed = normalized[:max_chars]
+    return trimmed.rstrip(" ,;:-")
 
 
 def _skip_signal_token(token: str) -> bool:

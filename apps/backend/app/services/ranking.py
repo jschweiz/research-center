@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from app.db.models import Item, ItemScore, ScoreBucket
-from app.services.profile import DEFAULT_RANKING_WEIGHTS, ProfileService
+from app.services.profile import DEFAULT_RANKING_THRESHOLDS, DEFAULT_RANKING_WEIGHTS, ProfileService
 
 
 def _contains_any(text: str, values: list[str]) -> int:
@@ -70,6 +70,7 @@ class RankingService:
         )
 
         weights = DEFAULT_RANKING_WEIGHTS | (self.profile.ranking_weights or {})
+        thresholds = DEFAULT_RANKING_THRESHOLDS | (self.profile.ranking_thresholds or {})
         total = (
             relevance_score * weights["relevance"]
             + novelty_score * weights["novelty"]
@@ -83,9 +84,9 @@ class RankingService:
         total = round(max(0.0, min(total, 1.0)), 4)
 
         bucket = ScoreBucket.ARCHIVE
-        if total >= 0.72:
+        if total >= thresholds["must_read_min"]:
             bucket = ScoreBucket.MUST_READ
-        elif total >= 0.45:
+        elif total >= thresholds["worth_a_skim_min"]:
             bucket = ScoreBucket.WORTH_A_SKIM
 
         score = item.score or ItemScore(item=item)

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.researchcenter.jobs.cleanup</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REPO_ROOT__/apps/backend/.venv/bin/python</string>
+    <string>-m</string>
+    <string>app.tasks.jobs</string>
+    <string>run-purge-raw-email-payloads-inline</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__REPO_ROOT__/apps/backend</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>15</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/jobs.cleanup.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/jobs.cleanup.stderr.log</string>
+</dict>
+</plist>

@@ -71,7 +71,7 @@ def test_inline_purge_task_logs_completion(client, monkeypatch, caplog) -> None:
     caplog.set_level(logging.INFO)
     caplog.clear()
 
-    result = purge_raw_email_payloads_task.run()
+    result = purge_raw_email_payloads_task()
 
     assert result == 3
     assert any(

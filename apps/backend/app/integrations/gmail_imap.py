@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import imaplib
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC
 from email import message_from_bytes, policy
 from email.header import decode_header
 from email.message import Message
@@ -117,11 +117,7 @@ class GmailImapConnector:
         subject = self._decode_header_value(message.get("Subject")) or "Untitled newsletter"
         sender = self._decode_header_value(message.get("From")) or "Unknown sender"
         date_header = message.get("Date")
-        published_at = (
-            parsedate_to_datetime(date_header).astimezone(UTC)
-            if date_header
-            else datetime.now(UTC)
-        )
+        published_at = parsedate_to_datetime(date_header).astimezone(UTC) if date_header else None
         text_body, html_body = self._extract_bodies(message)
         outbound_links = extract_email_links(html_body=html_body, text_body=text_body)
         if not text_body and html_body:

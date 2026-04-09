@@ -5,12 +5,11 @@ Revises: 20260327_0004
 Create Date: 2026-03-27 20:30:00.000000
 """
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect
 
+from alembic import op
 from app.db.models import Digest, DigestEntry, DigestSection
-
 
 revision = "20260327_0005"
 down_revision = "20260327_0004"

@@ -1,212 +1,168 @@
 # Research Center
 
-Research Center is a backend-first research briefing MVP. It ingests feeds and newsletters, deduplicates noisy coverage, ranks important items, generates an editorial morning brief, and lets you save the best items into Zotero from an iPad-first web app.
+Research Center now runs as a file-native Mac-hosted system with a Git-backed vault.
 
-## Stack
+- The Mac is the only automated writer and compute node.
+- Canonical documents live in the vault, while runtime state and indexes live in local SQLite.
+- The default vault lives in the `vault/` submodule and syncs through `https://github.com/jschweiz/research-vault`.
+- Obsidian, Working Copy, or any Git-aware client can open the vault away from the Mac.
+- The Mac-served webapp is for local control and status, not full corpus editing.
 
-- Backend: FastAPI, SQLAlchemy 2, Alembic, Celery, Postgres/pgvector
-- Frontend: React, TypeScript, Vite, React Router, TanStack Query, Tailwind CSS, Radix UI, PWA support
-- Infra: Render Static Site, Web Service, Background Worker, Cron Jobs, Postgres, Key Value
+## Vault Layout
 
-## Monorepo layout
+The backend expects this structure under `VAULT_ROOT_DIR`:
 
-- `apps/backend`: API, worker, domain services, migrations, tests
-- `apps/web`: iPad-first PWA client
-- `render.yaml`: Render blueprint for the full hosted MVP
+- `raw/<kind>/<doc-id>/source.md`
+- `wiki/<namespace>/<slug>.md`
+- `briefs/daily/YYYY-MM-DD/{brief.md,brief.json,audio.mp3,slides.md}`
+- `outputs/viewer/{latest/,history/}`
 
-## Quick start
+Source config, runs, leases, stop requests, pairing state, stars, AI budgets, and all materialized indexes now live in the local SQLite runtime at `DATABASE_URL`.
+Secrets and AI trace artifacts are stored outside the vault in `LOCAL_STATE_DIR`.
+LLM prompt bundles and response traces are written under `LOCAL_STATE_DIR/ai-traces/` and retained according to `AI_TRACE_RETENTION_DAYS`.
 
-### Backend
+The vault repo should track:
+
+- `raw/`
+- `wiki/`
+- `briefs/`
+- `outputs/viewer/`
+
+The vault repo should ignore `system/` and any other local runtime scratch space.
+
+## Start The App
+
+Backend:
 
 ```bash
-python3 --version  # 3.12+ required
+python3 --version
 make backend-install
+make vault-submodule-init
 cp apps/backend/.env.example apps/backend/.env
-make backend-migrate
+make web-build
 make backend-run
 ```
 
-To apply or refresh the curated default source catalog in an existing database without resetting data:
+There is no migration step anymore. `make backend-migrate` is a no-op kept only for compatibility.
+The app bootstraps the remaining auth/profile/connection SQLite tables automatically on startup unless `AUTO_CREATE_SCHEMA=false`.
+
+If `apps/web/dist/index.html` exists, the backend serves the local-control app and emits `/app-config.json` dynamically.
+
+## Key Settings
+
+Set these in `apps/backend/.env`:
 
 ```bash
-make backend-upsert-sources
+APP_ENV=development
+AUTO_CREATE_SCHEMA=true
+FRONTEND_ORIGIN=http://localhost:8000
+LOCAL_SERVER_BASE_URL=http://localhost:8000
+HOSTED_VIEWER_URL=
+VAULT_ROOT_DIR=vault
+VAULT_GIT_ENABLED=true
+VAULT_GIT_REMOTE_URL=https://github.com/jschweiz/research-vault
+VAULT_GIT_BRANCH=main
+LOCAL_STATE_DIR=apps/backend/.local-state
+AI_TRACE_RETENTION_DAYS=30
 ```
 
-If you prefer running `uvicorn` directly, use the backend venv and app dir explicitly:
+Notes:
+
+- If `VAULT_ROOT_DIR` is omitted, the app defaults to the repo-local `vault/` path.
+- `AUTO_CREATE_SCHEMA=true` keeps the small remaining SQLite tables ready for auth, profile settings, and saved connections without running migrations by hand.
+- `VAULT_GIT_ENABLED=true` makes the Mac pull before write pipelines when it can fast-forward cleanly, then commit and push vault changes back to GitHub after successful work.
+- The first sync can bootstrap an empty `research-vault` repo with the baseline vault files if the local checkout has GitHub push access.
+- `DATABASE_URL` points at the local runtime SQLite database used for source config, runs, leases, pairing, stars, AI budgets, and search/index projections.
+- `HOSTED_VIEWER_URL` is optional and lets the pairing flow offer a “return to viewer” link after a device redeems a local-control token.
+- Dedicated source pipelines are configured in the local DB and can be managed from the source CRUD API / local-control UI.
+- Gmail-backed newsletter ingestion can use either `GMAIL_INGEST_EMAIL` plus `GMAIL_INGEST_APP_PASSWORD`, or Gmail OAuth.
+- Gmail OAuth requires `GMAIL_OAUTH_CLIENT_ID` and `GMAIL_OAUTH_CLIENT_SECRET` in `apps/backend/.env`.
+- In Google Cloud, add the backend callback URL as an authorized redirect URI: `http://localhost:8000/api/connections/gmail/oauth/callback` for local development, or the equivalent callback on your deployed backend origin.
+
+## Dedicated Sources
+
+`run-ingest-inline` now starts by syncing these dedicated sources into the vault:
+
+- `openai-website`: website posts into `raw/blog-post/`
+- `anthropic-research`: research pages into `raw/blog-post/`
+- `mistral-research`: Mistral research news into `raw/blog-post/`
+- `tldr-email`: Gmail newsletters into `raw/newsletter/`
+- `medium-email`: Gmail digests into `raw/newsletter/`
+
+Edit sources from the Connections / Sources UI or the source CRUD API if you need to tune limits or disable one of these dedicated pipelines.
+
+The ingest/index path also supports `raw_kind=paper`. If you add a source such as alphaXiv, use `paper` so the rebuilt vault index classifies it as `ContentType.PAPER`.
+
+## One-Time Export From SQLite
+
+If you already have data in the old SQLite database:
 
 ```bash
-apps/backend/.venv/bin/python -m uvicorn app.main:app --app-dir apps/backend --reload
+cd apps/backend
+.venv/bin/python -m app.tasks.jobs export-sqlite-to-vault-inline
 ```
 
-### Gmail OAuth for local development
+That exports stored items into `raw/` and rebuilds the vault indexes.
 
-The `Connect Gmail` button stays disabled until the backend sees both of these values in `apps/backend/.env`:
+## Pipeline Commands
+
+All runtime commands are vault-centric:
 
 ```bash
-GMAIL_OAUTH_CLIENT_ID=your-google-oauth-client-id
-GMAIL_OAUTH_CLIENT_SECRET=your-google-oauth-client-secret
+cd apps/backend
+.venv/bin/python -m app.tasks.jobs run-ingest-inline
+.venv/bin/python -m app.tasks.jobs compile-wiki-inline
+.venv/bin/python -m app.tasks.jobs generate-brief-inline --brief-date 2026-04-07
+.venv/bin/python -m app.tasks.jobs generate-audio-inline --brief-date 2026-04-07
+.venv/bin/python -m app.tasks.jobs publish-latest-inline
+.venv/bin/python -m app.tasks.jobs sync-vault-inline
+.venv/bin/python -m app.tasks.jobs audit-vault-inline
 ```
 
-Create a Google OAuth client for a web app and register this local callback URI:
+What each phase does:
 
-```text
-http://localhost:8000/api/connections/gmail/oauth/callback
-```
+- `run-ingest-inline`: syncs dedicated sources from the local DB, writes raw documents into `raw/`, normalizes `source.md`, and rebuilds local DB indexes from vault files
+- `compile-wiki-inline`: rebuilds managed wiki pages and their local DB page/graph projections
+- `generate-brief-inline`: writes `brief.md`, `brief.json`, and `slides.md`
+- `generate-audio-inline`: writes `audio-script.md` and `audio.mp3` when TTS is configured
+- `publish-latest-inline`: rewrites the read-only viewer bundle under `outputs/viewer/`
+- `sync-vault-inline`: fast-forwards the local vault from GitHub when possible, then commits and pushes local vault changes
 
-Then restart the backend and refresh the app. The `Connections` page should report Gmail OAuth as configured and enable `Connect Gmail`.
+## Pair An iPad
 
-If you do not want to configure Google Cloud locally, the `Connections` page also supports direct Gmail access with a Gmail address plus an app password. That path does not need `GMAIL_OAUTH_CLIENT_ID` or `GMAIL_OAUTH_CLIENT_SECRET`.
-
-### Google Cloud TTS for free local voice summaries
-
-The voice-summary path now uses Google Cloud Text-to-Speech. For local development, the simplest free-tier setup is:
+Create a pairing link:
 
 ```bash
-gcloud auth application-default login
+cd apps/backend
+.venv/bin/python -m app.tasks.jobs pair-device-code --label "Office iPad"
 ```
 
-The backend will automatically pick up the local ADC credentials file that command creates. If you prefer explicit configuration, you can also set either:
+Open the returned `pairing_url` on the iPad while it is on the same Wi‑Fi as the Mac. After redemption, the iPad can call `/api/local-control/*` on the Mac origin.
 
-```bash
-GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/application_default_credentials.json
-```
+## What The iPad Uses
 
-or:
+Away from the Mac:
 
-```bash
-GOOGLE_CLOUD_TTS_CREDENTIALS_JSON='{"type":"service_account",...}'
-```
+- open the synced vault in Obsidian or Working Copy
+- or open `outputs/viewer/latest/index.html` from Files / Safari
 
-The default voice config is pinned to `en-US-Studio-O` with `MP3` output for a higher-quality narration voice by default. Override `GOOGLE_TTS_VOICE_NAME` in `apps/backend/.env` if you want a different speaker.
+On the same Wi‑Fi:
 
-### Web
-
-```bash
-cd apps/web
-npm install
-cp .env.example .env
-npm run dev
-```
-
-The backend seeds demo data by default in local development so the app has a usable brief, inbox, and profile immediately.
-That demo path now also upserts the curated default source catalog so newly added feeds appear in local dev without recreating the database.
-Semantic embeddings are now an optional install-time extra rather than a baseline runtime dependency; the default MVP path falls back to lexical clustering unless you explicitly install `.[embeddings]` and enable them.
-
-## Production on Render
-
-`render.yaml` is now set up as the deployment source of truth for the hosted MVP:
-
-- Render Postgres in Frankfurt with `pgvector` enabled by Alembic migrations
-- Render Key Value as the Celery broker/result backend with `noeviction`
-- Render Web Service for FastAPI with `preDeployCommand: alembic upgrade head`
-- Render Background Worker for Celery jobs, plus a persistent disk mounted at `/var/data`
-- Render Static Site for the React PWA with an SPA rewrite to `index.html`
-- Render Cron Jobs for ingest, digest enqueue, Zotero sync enqueue, database backup enqueue, and raw-email cleanup
-
-### Production secrets
-
-Set these in Render before the first production deploy:
-
-- `ADMIN_EMAIL`
-- `ADMIN_PASSWORD`
-- `GEMINI_API_KEY`
-- `METRICS_TOKEN` if you want the API metrics endpoint enabled in production
-- `GOOGLE_CLOUD_TTS_CREDENTIALS_JSON` if you want provider-backed voice briefs
-- `GMAIL_OAUTH_CLIENT_ID`
-- `GMAIL_OAUTH_CLIENT_SECRET`
-- `SENTRY_DSN` if you want error reporting
-- `WORKER_METRICS_PORT` if you want a worker-local metrics listener for Prometheus scraping
-
-The Blueprint generates `SECRET_KEY` and `ENCRYPTION_KEY` automatically.
-
-Zotero credentials are intentionally **not** long-lived Render env vars. Configure Zotero once from the deployed app's `Connections` screen; the API key and library metadata are then encrypted and stored in Postgres.
-
-### Deployment behavior
-
-- The API runs Alembic migrations before each deploy, so schema changes are applied before the new API version starts.
-- The static site builds against `VITE_API_URL=https://research-center-api.onrender.com/api`.
-- React Router deep links such as `/inbox`, `/connections`, and `/items/:id` work in production because the static site rewrites unmatched paths to `index.html`.
-
-### Scheduled jobs
-
-Render cron schedules are UTC, so local-time jobs are implemented as frequent enqueue jobs plus due checks in the worker:
-
-- ingest enqueue: every 30 minutes
-- digest enqueue: every 15 minutes, then the worker checks the profile's local digest time (default `07:00 Europe/Zurich`)
-- Zotero sync enqueue: every 30 minutes, then the worker runs it once after `02:00 Europe/Zurich`
-- database backup enqueue: daily at `01:30 UTC`, then the worker writes a compressed snapshot to `DATABASE_BACKUP_DIR`
-- raw email payload purge: daily cleanup
-
-### Database backups
-
-- Admins can trigger an on-demand backup with `POST /api/ops/backup-now`.
-- The worker writes compressed full-database snapshots named `research-center-db-backup-<timestamp>.json.gz`.
-- Render production is configured to store those snapshots on the worker disk at `/var/data/db_backups`.
-- Retention is count-based through `DATABASE_BACKUP_RETENTION_COUNT`, with a default of `14`.
-- Backup runs appear in the same operation history feed as other admin jobs, including file, size, row/table counts, and prune activity.
-- Hosted restore validation is still pending; only the local backup/create/prune path is verified in-repo.
-
-### AI cost guardrails
-
-- Paid AI calls are now hard-capped by `AI_DAILY_COST_LIMIT_USD`, which defaults to `$10.00` per app day.
-- The cap applies to both Gemini LLM requests and Google Cloud TTS synthesis, not just text generation.
-- The backend reserves budget before provider calls and releases or consumes that reservation after the call finishes, so concurrent workers do not overspend the daily limit.
-- Gemini paths fall back to existing heuristic behavior when the cap is exhausted; TTS synthesis is blocked once the budget is gone.
-- Stale in-flight reservations expire automatically after `AI_BUDGET_RESERVATION_TTL_MINUTES` to avoid a crashed worker permanently locking the budget.
-
-### Auth hardening
-
-- Production cookie-authenticated login and side-effecting routes require the configured frontend `Origin` or `Referer`.
-- Repeated failed admin logins are throttled through `LOGIN_RATE_LIMIT_MAX_ATTEMPTS`, `LOGIN_RATE_LIMIT_WINDOW_MINUTES`, and `LOGIN_RATE_LIMIT_LOCKOUT_MINUTES`.
-- The current throttle is intentionally in-process, which matches the app's single-web-service MVP deployment shape on Render.
-- Optional semantic clustering now requires installing the backend with `.[embeddings]`; the default production build keeps embeddings disabled and uses lexical clustering instead.
-
-### Logging and traceability
-
-- The backend now emits structured application logs for API requests, startup/shutdown, auth events, queued operations, and worker task lifecycles.
-- Every API response includes an `X-Request-ID` header, and the same request ID is attached to the corresponding log lines.
-- Production defaults to JSON logs. Override `LOG_FORMAT=text` locally if you want human-readable console logs, or change `LOG_LEVEL` to increase/decrease verbosity.
-
-### Metrics
-
-- The API now exposes Prometheus-style metrics at `/metrics` when `METRICS_ENABLED=true`.
-- In production, the API metrics endpoint stays disabled unless `METRICS_TOKEN` is configured; scrape it with either `Authorization: Bearer <token>` or `X-Metrics-Token: <token>`.
-- The metrics include API request counts/latency, auth event counters, admin operation counters, and worker task counts/latency.
-- The Celery worker can expose the same metrics format on its own HTTP listener when `WORKER_METRICS_PORT` is set. It uses the same `METRICS_PATH` and `METRICS_TOKEN` settings.
-- Worker metrics binding defaults to `127.0.0.1`; only move `WORKER_METRICS_HOST` off localhost if you intend to scrape it from a trusted network path.
-
-## Background jobs
-
-- `celery -A app.tasks.celery_app.celery_app worker --loglevel=info`
-- `python -m app.tasks.jobs`
-
-Use the cron endpoints in `render.yaml` to enqueue ingest, Zotero sync, and daily brief generation in hosted environments.
-The same helper also supports `enqueue-database-backup` and `run-database-backup-inline` for scheduled and local backup execution.
+- open the paired Mac URL
+- trigger ingest, brief regeneration, audio generation, viewer publish, or an explicit vault sync
+- pull the `research-vault` repo on the iPad after the Mac pushes changes
 
 ## Tests
+
+Backend:
 
 ```bash
 make backend-test
 ```
 
-Repository CI is also configured in `.github/workflows/ci.yml` to run backend lint/tests, frontend typecheck/build, and runtime dependency audits on pushes and pull requests.
-
-For a fuller pre-release pass, run:
+Frontend:
 
 ```bash
-make release-check
+make web-typecheck
+make web-build
 ```
-
-## Current implementation scope
-
-This repo implements the full MVP skeleton and working core flows:
-
-- managed single-user auth with signed session cookies
-- source management, manual URL import, digest and item APIs
-- deterministic ranking and brief generation
-- demo ingest, clustering, insights, and follow-up prompts
-- Gmail, Zotero, LLM, and paper adapters with concrete service interfaces
-- Celery tasks for ingest, digest, sync, and cleanup
-- responsive editorial PWA for Brief, Inbox, Item Detail, Connections, and Profile
-
-External integrations depend on credentials and provider tokens in environment variables or connection settings. The default hosted LLM path uses `GEMINI_API_KEY`, while provider-backed voice briefs use Google Cloud ADC or `GOOGLE_CLOUD_TTS_CREDENTIALS_JSON`.

@@ -8,7 +8,15 @@ from app.db.session import get_session_factory
 def test_profile_defaults_to_live_mode_when_demo_seed_is_off(authenticated_client: TestClient) -> None:
     response = authenticated_client.get("/api/profile")
     assert response.status_code == 200
-    assert response.json()["data_mode"] == "live"
+    payload = response.json()
+    assert payload["data_mode"] == "live"
+    assert payload["alphaxiv_search_settings"] == {
+        "topics": [],
+        "organizations": [],
+        "sort": "Hot",
+        "interval": "30 Days",
+        "source": None,
+    }
 
 
 def test_profile_rejects_invalid_timezone(authenticated_client: TestClient) -> None:
@@ -31,6 +39,29 @@ def test_profile_accepts_data_mode_update(authenticated_client: TestClient) -> N
     response = authenticated_client.patch("/api/profile", json={"data_mode": "seed"})
     assert response.status_code == 200
     assert response.json()["data_mode"] == "seed"
+
+
+def test_profile_accepts_alphaxiv_search_settings_update(authenticated_client: TestClient) -> None:
+    response = authenticated_client.patch(
+        "/api/profile",
+        json={
+            "alphaxiv_search_settings": {
+                "topics": ["agents", "reasoning"],
+                "organizations": ["OpenAI", "Anthropic"],
+                "sort": "Recommended",
+                "interval": "90 Days",
+                "source": "GitHub",
+            }
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["alphaxiv_search_settings"] == {
+        "topics": ["agents", "reasoning"],
+        "organizations": ["OpenAI", "Anthropic"],
+        "sort": "Recommended",
+        "interval": "90 Days",
+        "source": "GitHub",
+    }
 
 
 def test_profile_timezone_update_purges_cached_digests(

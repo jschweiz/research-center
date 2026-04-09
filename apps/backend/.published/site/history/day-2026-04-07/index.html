@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Morning Brief • 2026-04-07</title>
+    <style>
+      :root {
+        --paper: #f4efe4;
+        --ink: #1f1b16;
+        --muted: #655c50;
+        --line: rgba(31, 27, 22, 0.12);
+        --panel: rgba(255, 252, 246, 0.86);
+        --accent: #0f766e;
+        --accent-soft: rgba(15, 118, 110, 0.12);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino Linotype", serif;
+        background:
+          radial-gradient(circle at top left, rgba(15,118,110,0.12), transparent 32%),
+          linear-gradient(180deg, #f7f2e8, var(--paper));
+        color: var(--ink);
+      }
+      a { color: var(--accent); }
+      .page { max-width: 1200px; margin: 0 auto; padding: 32px 20px 64px; }
+      .hero {
+        display: grid;
+        gap: 16px;
+        padding: 28px;
+        border-radius: 28px;
+        background: rgba(255,255,255,0.66);
+        border: 1px solid var(--line);
+        box-shadow: 0 24px 60px rgba(31,27,22,0.08);
+      }
+      .eyebrow {
+        margin: 0;
+        font: 600 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      h1 { margin: 0; font-size: clamp(2.2rem, 5vw, 4.6rem); line-height: 0.95; }
+      .lead { margin: 0; max-width: 70ch; font-size: 1.05rem; line-height: 1.7; color: var(--muted); }
+      .meta { display: flex; flex-wrap: wrap; gap: 10px 18px; color: var(--muted); font-size: 0.95rem; }
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 10px;
+      }
+      .button, .link-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 16px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,0.8);
+        text-decoration: none;
+        color: var(--ink);
+      }
+      .button.primary { background: var(--accent); color: white; border-color: transparent; }
+      .grid { display: grid; gap: 18px; margin-top: 28px; }
+      .grid.cols-2 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+      .panel {
+        padding: 22px;
+        border-radius: 24px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+      }
+      .section {
+        margin-top: 34px;
+      }
+      .section h2 {
+        margin: 0 0 14px;
+        font-size: 1.55rem;
+      }
+      .card-title {
+        margin: 10px 0 0;
+        font-size: 1.2rem;
+        line-height: 1.2;
+      }
+      .card-meta {
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 0.92rem;
+        line-height: 1.6;
+      }
+      .note {
+        margin-top: 12px;
+        padding: 12px 14px;
+        border-radius: 18px;
+        background: var(--accent-soft);
+        color: var(--ink);
+      }
+      audio { width: 100%; margin-top: 12px; }
+      .archive-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 14px;
+      }
+      .archive-item {
+        display: block;
+        padding: 16px;
+        border-radius: 20px;
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,0.78);
+        text-decoration: none;
+      }
+      .archive-item.current { background: rgba(15,118,110,0.12); }
+      .file-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <p class="eyebrow">Research Center snapshot</p>
+        <h1>Morning Brief • 2026-04-07</h1>
+        <div class="meta">
+          <span>Published 2026-04-07 08:39 UTC</span>
+          <span>Coverage 2026-04-06</span>
+          <span>day:2026-04-07</span>
+        </div>
+        <p class='lead'>Fixture editorial note.</p>
+        <div class="toolbar">
+          <a class="button primary" href="http://localhost:8000">Open Local Mac</a>
+          <a class="button" href="manifest.json">Manifest JSON</a>
+          <a class="button" href="brief.md">Brief Markdown</a>
+          <a class='button' href='audio.mp3'>Audio MP3</a>
+        </div>
+      </section>
+
+      <section class='panel'><p class='eyebrow'>Audio</p><audio controls preload='metadata' src='audio.mp3'></audio></section>
+
+      <section class="panel section">
+        <p class="eyebrow">Archive</p>
+        <div class="archive-list">
+          <a class='archive-item current' href='index.html'><p class='eyebrow'>day</p><p class='card-title'>Morning Brief • 2026-04-07</p><p class='card-meta'>2026-04-07<br />2026-04-07 08:39 UTC</p></a>
+        </div>
+      </section>
+
+      <section class='section'><h2>Editorial shortlist</h2><div class='grid cols-2'><article class='panel'><p class='eyebrow'>Publishing Feed</p><h3 class='card-title'><a href='items/6dfef803-2f83-4c97-9c91-63d31a06af09.html'>Signal from the publishing test feed</a></h3><p class='card-meta'>Published 2026-04-07 02:39 UTC</p><p class='lead'>A concise summary for publication tests.</p><p class='note'>Fixture note, concise, publication tests</p><div class='file-links'><a class='link-pill' href='items/6dfef803-2f83-4c97-9c91-63d31a06af09.html'>Item page</a><a class='link-pill' href='items/6dfef803-2f83-4c97-9c91-63d31a06af09.md'>Markdown</a><a class='link-pill' href='items/6dfef803-2f83-4c97-9c91-63d31a06af09.json'>JSON</a></div></article></div></section>
+    </main>
+  </body>
+</html>

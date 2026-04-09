@@ -138,9 +138,13 @@ export function AudioBriefPlayer({
     setIsLoading(true);
     setLoadError(null);
     try {
-      const response = await fetch(api.getAudioSummaryUrl(briefDate), {
-        credentials: "include",
-      });
+      const audioUrl = audioBrief.audio_url ?? api.getAudioSummaryUrl(briefDate);
+      const requestInit = audioBrief.audio_url
+        ? undefined
+        : {
+            credentials: "include" as const,
+          };
+      const response = await fetch(audioUrl, requestInit);
       if (!response.ok) {
         const message = await readAudioError(response);
         throw new Error(message || "Audio brief could not be loaded.");

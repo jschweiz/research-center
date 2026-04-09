@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from pydantic import BaseModel, Field, HttpUrl, field_serializer
 
 from app.db.models import ContentType, RunStatus, ScoreBucket, TriageStatus
+from app.schemas.common import AlphaXivPaperRead
 
 
 def _serialize_utc_datetime(value: datetime | None) -> str | None:
@@ -52,6 +53,8 @@ class RelatedMention(BaseModel):
 
 class ItemListEntry(BaseModel):
     id: str
+    kind: str | None = None
+    source_id: str | None = None
     title: str
     source_name: str
     organization_name: str | None = None
@@ -75,6 +78,8 @@ class ItemListEntry(BaseModel):
 
 class ItemDetailRead(BaseModel):
     id: str
+    kind: str | None = None
+    source_id: str | None = None
     title: str
     source_name: str
     organization_name: str | None = None
@@ -93,8 +98,15 @@ class ItemDetailRead(BaseModel):
     insight: ItemInsightRead = Field(default_factory=ItemInsightRead)
     also_mentioned_in: list[RelatedMention] = Field(default_factory=list)
     zotero_matches: list[dict] = Field(default_factory=list)
+    doc_role: str = "primary"
+    parent_id: str | None = None
+    asset_paths: list[str] = Field(default_factory=list)
+    raw_doc_path: str | None = None
+    lightweight_enrichment_status: str = "pending"
+    lightweight_enriched_at: datetime | None = None
+    alphaxiv: AlphaXivPaperRead | None = None
 
-    @field_serializer("published_at", "raw_payload_retention_until", when_used="json")
+    @field_serializer("published_at", "raw_payload_retention_until", "lightweight_enriched_at", when_used="json")
     def serialize_datetimes(self, value: datetime | None) -> str | None:
         return _serialize_utc_datetime(value)
 

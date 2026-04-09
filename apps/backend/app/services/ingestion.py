@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -42,11 +41,16 @@ from app.services.connections import ConnectionService
 from app.services.data_mode import merge_metadata_for_data_mode
 from app.services.profile import ProfileService
 from app.services.ranking import RankingService
+from app.services.vault_runtime import (
+    content_hash as stable_content_hash,
+    document_identity_hash,
+)
 from app.services.text import normalize_item_title
 
 TRACKING_PREFIXES = ("utm_", "mc_", "ref", "source")
 EMAIL_QUERY_RE = re.compile(r"^[^@\s,;:]+@[^@\s,;:]+\.[^@\s,;:]+$")
 ARXIV_API_BASE = "https://export.arxiv.org/api/query"
+ARXIV_ABS_PATH_RE = re.compile(r"^/(?:abs|pdf)/(?P<identifier>\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?$", re.IGNORECASE)
 SOURCE_PROBE_GMAIL_WINDOW_DAYS = 30
 NEWSLETTER_FACT_QUERY_KEY = "newsletter_fact"
 NEWSLETTER_FACT_URL_LIMIT = 6
@@ -80,10 +84,101 @@ def normalize_url(url: str) -> str:
 
 
 def hash_content(title: str, cleaned_text: str) -> str:
-    digest = hashlib.sha256()
-    digest.update(title.strip().lower().encode("utf-8"))
-    digest.update(cleaned_text.strip().lower().encode("utf-8"))
-    return digest.hexdigest()
+    return stable_content_hash(title, cleaned_text)
+
+
+def has_external_document_url(url: str | None) -> bool:
+    parsed = urlparse(str(url or ""))
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def is_synthetic_canonical_url(url: str | None) -> bool:
+    parsed = urlparse(str(url or ""))
+    return parsed.scheme == "source"
+
+
+def build_synthetic_canonical_url(*, source_id: str, identity_hash: str) -> str:
+    return f"source://{source_id}/{identity_hash}"
+
+
+def _identity_value(*values: object) -> str | None:
+    for value in values:
+        if value is None:
+            continue
+        normalized = str(value).strip()
+        if normalized:
+            return normalized
+    return None
+
+
+def _arxiv_identity_key(canonical_url: str) -> str | None:
+    path = urlparse(canonical_url).path or ""
+    match = ARXIV_ABS_PATH_RE.match(path)
+    if not match:
+        return None
+    return f"arxiv:{match.group('identifier')}"
+
+
+def build_document_identity_key(
+    *,
+    source: Source,
+    canonical_url: str,
+    title: str,
+    published_at: datetime | None,
+    metadata_json: dict[str, Any] | None,
+    raw_payload: dict[str, Any] | None,
+) -> str:
+    metadata = metadata_json if isinstance(metadata_json, dict) else {}
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    explicit_identity = _identity_value(
+        metadata.get("identity_key"),
+        metadata.get("external_key"),
+    )
+    if explicit_identity:
+        return explicit_identity
+
+    if source.type == SourceType.GMAIL:
+        message_id = _identity_value(
+            metadata.get("newsletter_message_id"),
+            payload.get("message_id"),
+        )
+        if message_id:
+            fact_index = _identity_value(
+                metadata.get("newsletter_fact_index"),
+                payload.get("fact_index"),
+                "1",
+            )
+            return f"gmail:{message_id}:{fact_index}"
+
+    doi = _identity_value(metadata.get("doi"), payload.get("doi"))
+    if doi:
+        return f"doi:{doi}"
+
+    if source.type == SourceType.ARXIV:
+        arxiv_identity = _arxiv_identity_key(canonical_url)
+        if arxiv_identity:
+            return arxiv_identity
+
+    feed_entry_id = _identity_value(metadata.get("feed_entry_id"))
+    feed_entry = payload.get("feed_entry")
+    if not feed_entry_id and isinstance(feed_entry, dict):
+        feed_entry_id = _identity_value(
+            feed_entry.get("id"),
+            feed_entry.get("guid"),
+        )
+    if feed_entry_id:
+        return f"feed:{feed_entry_id}"
+
+    if has_external_document_url(canonical_url):
+        return canonical_url
+
+    fallback_parts = [
+        normalize_item_title(title),
+        published_at.date().isoformat() if published_at else None,
+        source.id,
+    ]
+    fallback_key = "::".join(part for part in fallback_parts if part)
+    return fallback_key or canonical_url or f"{source.id}:{source.type.value}"
 
 
 def merge_unique_links(existing: list[str], incoming: list[str], limit: int = 50) -> list[str]:
@@ -136,6 +231,12 @@ def choose_published_at(existing: datetime | None, incoming: datetime | None) ->
     ):
         return incoming
     return incoming
+
+
+def should_replace_canonical_url(*, existing: str, incoming: str) -> bool:
+    if not incoming or existing == incoming:
+        return False
+    return is_synthetic_canonical_url(existing) and has_external_document_url(incoming)
 
 
 @dataclass
@@ -980,6 +1081,25 @@ class IngestionService:
             source.type, title, canonical_url, cleaned_text
         )
         title = normalize_item_title(title, content_type=content_type)
+        identity_key = build_document_identity_key(
+            source=source,
+            canonical_url=canonical_url,
+            title=title,
+            published_at=published_at,
+            metadata_json=metadata_json,
+            raw_payload=raw_payload,
+        )
+        identity_hash = document_identity_hash(
+            source_id=source.id,
+            external_key=identity_key,
+            canonical_url=canonical_url,
+            fallback_key=title,
+        )
+        if not has_external_document_url(canonical_url):
+            canonical_url = build_synthetic_canonical_url(
+                source_id=source.id,
+                identity_hash=identity_hash,
+            )
         content_hash = hash_content(title, cleaned_text)
         base_query = select(Item).options(
             selectinload(Item.content),
@@ -989,10 +1109,18 @@ class IngestionService:
             selectinload(Item.zotero_matches),
         )
         item = self.db.scalar(base_query.where(Item.canonical_url == canonical_url))
+        matched_by_identity_hash = False
         matched_by_content_hash = False
         created = False
         duplicate_mention_recorded = False
         previous_edition_day: date | None = None
+        if not item:
+            item = self.db.scalar(
+                base_query.where(Item.identity_hash == identity_hash).order_by(
+                    Item.first_seen_at.asc()
+                )
+            )
+            matched_by_identity_hash = item is not None
         if not item:
             item = self.db.scalar(
                 base_query.where(Item.content_hash == content_hash).order_by(
@@ -1000,6 +1128,15 @@ class IngestionService:
                 )
             )
             matched_by_content_hash = item is not None
+        matched_by_identity_alias = bool(
+            item and matched_by_identity_hash and item.canonical_url != canonical_url
+        )
+        matched_by_revision_alias = bool(
+            item
+            and matched_by_content_hash
+            and not matched_by_identity_hash
+            and item.canonical_url != canonical_url
+        )
         if item:
             previous_edition_day = edition_day_for_datetimes(
                 published_at=item.published_at,
@@ -1017,6 +1154,7 @@ class IngestionService:
                 canonical_url=canonical_url,
                 content_type=content_type,
                 content_hash=content_hash,
+                identity_hash=identity_hash,
                 extraction_confidence=extraction_confidence,
                 metadata_json=metadata_json,
                 first_seen_at=utcnow(),
@@ -1024,7 +1162,17 @@ class IngestionService:
             self.db.add(item)
             self.db.flush()
         else:
-            if matched_by_content_hash and item.canonical_url != canonical_url:
+            if matched_by_revision_alias:
+                self._record_duplicate_mention(item, source, canonical_url, title)
+                duplicate_mention_recorded = True
+            elif (
+                matched_by_identity_alias
+                and has_external_document_url(canonical_url)
+                and not should_replace_canonical_url(
+                    existing=item.canonical_url,
+                    incoming=canonical_url,
+                )
+            ):
                 self._record_duplicate_mention(item, source, canonical_url, title)
                 duplicate_mention_recorded = True
             existing_title = normalize_item_title(item.title, content_type=item.content_type)
@@ -1033,8 +1181,21 @@ class IngestionService:
                 item.title = preferred_title[:500]
             item.authors = authors or item.authors
             item.published_at = choose_published_at(item.published_at, published_at)
+            if matched_by_identity_alias and should_replace_canonical_url(
+                existing=item.canonical_url,
+                incoming=canonical_url,
+            ):
+                item.canonical_url = canonical_url
             item.content_type = content_type
             item.content_hash = content_hash
+            if matched_by_revision_alias:
+                item.identity_hash = item.identity_hash or document_identity_hash(
+                    source_id=item.source_id or source.id,
+                    canonical_url=item.canonical_url,
+                    fallback_key=item.title,
+                )
+            else:
+                item.identity_hash = identity_hash
             if not item.source_name:
                 item.source = source
                 item.source_name = source.name
@@ -1047,7 +1208,7 @@ class IngestionService:
 
         if not item.content:
             item.content = ItemContent(item=item)
-        if matched_by_content_hash and item.canonical_url != canonical_url:
+        if matched_by_revision_alias:
             if not item.content.cleaned_text or len(cleaned_text) > len(
                 item.content.cleaned_text or ""
             ):
@@ -1635,7 +1796,7 @@ class IngestionService:
                 title=title,
                 canonical_url=link or f"{source.id}-{item_index}",
                 authors=[],
-                published_at=published_at or utcnow(),
+                published_at=published_at,
                 cleaned_text=cleaned_text,
                 raw_payload=raw_payload,
                 outbound_links=outbound_links,
@@ -1709,6 +1870,7 @@ class IngestionService:
         for entry_index, entry in enumerate(processed_entries, start=1):
             item_index = len(items)
             link = getattr(entry, "link", None) or feed_locator or source.url or source.query or ""
+            feed_entry_id = getattr(entry, "id", None) or getattr(entry, "guid", None)
             title = getattr(entry, "title", "Untitled item")
             fallback_author = entry.author if getattr(entry, "author", None) else None
             authors = [
@@ -1727,6 +1889,7 @@ class IngestionService:
                 "feed_entry": {
                     "title": title,
                     "link": link,
+                    "id": feed_entry_id,
                     "published": getattr(entry, "published", None)
                     or getattr(entry, "updated", None),
                     "summary": summary[:4000],
@@ -1750,7 +1913,7 @@ class IngestionService:
                 title=title,
                 canonical_url=link or f"{source.id}-{item_index}",
                 authors=authors,
-                published_at=published_at or utcnow(),
+                published_at=published_at,
                 cleaned_text=cleaned_text,
                 raw_payload=raw_payload,
                 outbound_links=outbound_links,
@@ -1758,6 +1921,7 @@ class IngestionService:
                 metadata_json={
                     "feed_title": parsed.feed.get("title"),
                     "source_type": source.type.value,
+                    **({"feed_entry_id": feed_entry_id} if feed_entry_id else {}),
                     **(
                         {"abstract_text": self._normalize_analysis_text(summary)}
                         if source.type == SourceType.ARXIV and summary
@@ -1898,7 +2062,7 @@ class IngestionService:
             "source_name": source.name,
             "subject": message.subject,
             "sender": message.sender,
-            "published_at": message.published_at.isoformat(),
+            "published_at": message.published_at.isoformat() if message.published_at else None,
             "text_body": message.text_body,
             "outbound_links": message.outbound_links,
         }

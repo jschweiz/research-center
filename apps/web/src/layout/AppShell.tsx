@@ -1,16 +1,18 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Compass, LibraryBig, Newspaper, Settings2, UserCircle2 } from "lucide-react";
+import { Compass, LibraryBig, Newspaper, PanelLeftClose, PanelLeftOpen, Settings2, UserCircle2, Workflow } from "lucide-react";
 
 import { ApiError, api } from "../api/client";
 import { LoginScreen } from "../components/LoginScreen";
 import { SkimmableText } from "../components/SkimmableText";
+import { getStoredShellSidebarCollapsed, setStoredShellSidebarCollapsed } from "../runtime/storage";
 
 const navItems = [
   { label: "Brief", to: "/", icon: Newspaper },
   { label: "Inbox", to: "/inbox", icon: Compass },
   { label: "Connections", to: "/connections", icon: Settings2 },
+  { label: "Pipeline", to: "/pipeline", icon: Workflow },
   { label: "Profile", to: "/profile", icon: UserCircle2 },
 ];
 
@@ -21,6 +23,7 @@ export type AppShellOutletContext = {
 export function AppShell() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [headerActions, setHeaderActions] = useState<ReactNode | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(getStoredShellSidebarCollapsed);
   const queryClient = useQueryClient();
   const location = useLocation();
 
@@ -49,7 +52,8 @@ export function AppShell() {
 
   const title = useMemo(() => {
     if (location.pathname.startsWith("/inbox")) return "Inbox";
-    if (location.pathname.startsWith("/connections")) return "Connections and sources";
+    if (location.pathname.startsWith("/connections")) return "Connections";
+    if (location.pathname.startsWith("/pipeline")) return "Pipeline";
     if (location.pathname.startsWith("/profile")) return "Interest Profile";
     if (location.pathname.startsWith("/items/")) return "Item Detail";
     return "Morning Brief";
@@ -58,6 +62,10 @@ export function AppShell() {
   useEffect(() => {
     setHeaderActions(null);
   }, [location.pathname]);
+
+  useEffect(() => {
+    setStoredShellSidebarCollapsed(sidebarCollapsed);
+  }, [sidebarCollapsed]);
 
   if (meQuery.isLoading) {
     return <div className="loading-screen">Loading Research Center…</div>;
@@ -79,34 +87,62 @@ export function AppShell() {
     return <div className="loading-screen">Backend unavailable. Check the API service and retry.</div>;
   }
 
+  const SidebarToggleIcon = sidebarCollapsed ? PanelLeftOpen : PanelLeftClose;
+
   return (
     <div className="min-h-screen bg-[var(--paper)] text-[var(--ink)]">
-      <div className="app-grid mx-auto min-h-screen max-w-[1680px] px-4 py-4 sm:px-6 lg:px-8">
+      <div
+        className="app-grid mx-auto min-h-screen max-w-[1680px] px-4 py-4 sm:px-6 lg:px-8"
+        data-sidebar-collapsed={sidebarCollapsed ? "true" : "false"}
+      >
         <aside className="editorial-sidebar">
-          <div className="space-y-3">
-            <p className="font-mono text-[11px] uppercase tracking-[0.35em] text-[var(--muted)]">Research Center</p>
-            <h1 className="font-display text-5xl leading-none text-[var(--ink)]">Research cockpit</h1>
-            <SkimmableText className="text-sm leading-6 text-[var(--muted)]">
-              Editorial briefings, ranked signals, and Zotero triage in one surface.
-            </SkimmableText>
+          <div className="editorial-sidebar-header">
+            <div className="editorial-sidebar-heading">
+              <p className="editorial-sidebar-kicker font-mono text-[11px] uppercase tracking-[0.35em] text-[var(--muted)]">Research Center</p>
+              <span
+                aria-hidden="true"
+                className="editorial-sidebar-monogram font-mono text-[11px] uppercase tracking-[0.3em] text-[var(--muted)]"
+              >
+                RC
+              </span>
+              <button
+                aria-expanded={!sidebarCollapsed}
+                aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                className="secondary-button h-11 w-11 shrink-0 justify-center p-0"
+                onClick={() => setSidebarCollapsed((current) => !current)}
+                title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                type="button"
+              >
+                <SidebarToggleIcon className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="editorial-sidebar-copy space-y-3">
+              <h1 className="font-display text-5xl leading-none text-[var(--ink)]">Research cockpit</h1>
+              <SkimmableText className="text-sm leading-6 text-[var(--muted)]">
+                Editorial briefings, ranked signals, and Zotero triage in one surface.
+              </SkimmableText>
+            </div>
           </div>
 
-          <nav className="mt-10 space-y-2">
+          <nav className="editorial-sidebar-nav mt-10 space-y-2">
             {navItems.map(({ label, to, icon: Icon }) => (
               <NavLink
+                aria-label={label}
                 key={to}
                 className={({ isActive }) =>
                   `nav-link ${isActive ? "nav-link-active" : ""}`
                 }
+                title={label}
                 to={to}
               >
                 <Icon className="h-4 w-4" />
-                {label}
+                <span className="nav-link-label">{label}</span>
               </NavLink>
             ))}
           </nav>
 
-          <section className="editorial-panel mt-10 bg-[rgba(255,255,255,0.58)]">
+          <section className="editorial-panel editorial-sidebar-panel mt-10 bg-[rgba(255,255,255,0.58)]">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="font-mono text-[11px] uppercase tracking-[0.24em] text-[var(--muted)]">Managed Account</p>

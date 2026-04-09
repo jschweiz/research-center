@@ -1,23 +1,26 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ChevronDown, ChevronUp } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronUp, History, Play, Workflow } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 
 import { api } from "../../api/client";
-import type { IngestionRunHistoryEntry, RunStatus, Source, SourceProbeResult, SourceType } from "../../api/types";
+import type { IngestionRunHistoryEntry, RunStatus, Source, SourceProbeResult, SourceRawKind, SourceType } from "../../api/types";
 import { SkimmableText } from "../../components/SkimmableText";
 import defaultZoteroAutoTagVocabulary from "../../constants/zoteroAutoTagVocabulary.json";
 
 const DEFAULT_ZOTERO_AUTO_TAG_VOCABULARY = defaultZoteroAutoTagVocabulary as string[];
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 type SourceFormState = {
   name: string;
   type: SourceType;
+  rawKind: SourceRawKind;
   url: string;
   website: string;
+  discoveryMode: "rss_feed" | "website_index";
   query: string;
   description: string;
-  priority: string;
+  maxItems: string;
   tags: string;
   active: boolean;
 };
@@ -170,26 +173,35 @@ function readErrorMessage(error: unknown) {
 function createEmptySourceForm(): SourceFormState {
   return {
     name: "",
-    type: "rss",
+    type: "website",
+    rawKind: "blog-post",
     url: "",
     website: "",
+    discoveryMode: "rss_feed",
     query: "",
     description: "",
-    priority: "60",
+    maxItems: "20",
     tags: "",
     active: true,
   };
 }
 
 function mapSourceToForm(source: Source): SourceFormState {
+  const discoveryMode =
+    readStringMetadata(source.config_json.discovery_mode) === "website_index" ? "website_index" : "rss_feed";
   return {
     name: source.name,
     type: source.type,
+    rawKind:
+      source.raw_kind === "newsletter" || source.raw_kind === "paper" || source.raw_kind === "article" || source.raw_kind === "thread" || source.raw_kind === "signal"
+        ? source.raw_kind
+        : "blog-post",
     url: source.url ?? "",
     website: readStringMetadata(source.config_json.website_url) ?? "",
+    discoveryMode,
     query: source.query ?? "",
     description: source.description ?? "",
-    priority: String(source.priority),
+    maxItems: String(source.max_items),
     tags: source.tags.join(", "),
     active: source.active,
   };
@@ -197,14 +209,10 @@ function mapSourceToForm(source: Source): SourceFormState {
 
 function formatSourceTypeLabel(type: SourceType) {
   switch (type) {
-    case "rss":
-      return "RSS";
-    case "arxiv":
-      return "arXiv";
+    case "website":
+      return "Website";
     case "gmail_newsletter":
       return "Gmail";
-    case "manual_url":
-      return "Manual";
     default:
       return type;
   }
@@ -213,8 +221,10 @@ function formatSourceTypeLabel(type: SourceType) {
 function buildSourceConfig(sourceForm: SourceFormState, existingConfig: Record<string, unknown> = {}) {
   const config = { ...existingConfig };
   const trimmedWebsite = sourceForm.website.trim();
+  const trimmedQuery = sourceForm.query.trim();
 
-  if (sourceForm.type === "rss") {
+  if (sourceForm.type === "website") {
+    config.discovery_mode = sourceForm.discoveryMode;
     if (trimmedWebsite) {
       config.website_url = trimmedWebsite;
     } else {
@@ -224,36 +234,58 @@ function buildSourceConfig(sourceForm: SourceFormState, existingConfig: Record<s
   }
 
   delete config.website_url;
+  delete config.discovery_mode;
+  delete config.senders;
+  delete config.raw_query;
+
+  if (trimmedQuery) {
+    const parts = trimmedQuery
+      .split(/[\n,]+/)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    const senderList = parts.length && parts.every((entry) => EMAIL_RE.test(entry)) ? parts : null;
+
+    if (senderList?.length) {
+      config.senders = senderList;
+    } else if (EMAIL_RE.test(trimmedQuery)) {
+      config.senders = [trimmedQuery];
+    } else {
+      config.raw_query = trimmedQuery;
+    }
+  }
+
   return config;
 }
 
 function getSourceLocatorEntries(source: Pick<Source, "type" | "url" | "query" | "config_json">) {
   const entries: Array<{ label: string; value: string }> = [];
   const website = readStringMetadata(source.config_json.website_url);
+  const discoveryMode = readStringMetadata(source.config_json.discovery_mode);
+  const senderList = readStringListMetadata(source.config_json.senders);
+  const rawQuery = readStringMetadata(source.config_json.raw_query);
 
   if (source.type === "gmail_newsletter") {
-    if (source.query) {
-      entries.push({ label: "Sender filter", value: source.query });
+    if (senderList?.length) {
+      entries.push({ label: "Senders", value: senderList.join(", ") });
+    }
+    if (rawQuery) {
+      entries.push({ label: "Gmail query", value: rawQuery });
     }
     return entries;
   }
 
-  if (source.type === "rss") {
+  if (source.type === "website") {
     if (source.url) {
-      entries.push({ label: "Feed URL", value: source.url });
+      entries.push({ label: discoveryMode === "website_index" ? "Index URL" : "Feed URL", value: source.url });
     }
     if (website) {
       entries.push({ label: "Website", value: website });
     }
-    return entries;
-  }
-
-  if (source.type === "arxiv") {
-    if (source.query) {
-      entries.push({ label: "Query", value: source.query });
-    }
-    if (source.url) {
-      entries.push({ label: "Feed URL", value: source.url });
+    if (discoveryMode) {
+      entries.push({
+        label: "Discovery mode",
+        value: discoveryMode === "website_index" ? "Website index" : "RSS/feed",
+      });
     }
     return entries;
   }
@@ -263,6 +295,40 @@ function getSourceLocatorEntries(source: Pick<Source, "type" | "url" | "query" |
   }
 
   return entries;
+}
+
+function formatRawKindLabel(value: string) {
+  return value.replace(/[-_]/g, " ");
+}
+
+function formatRunStatusChipLabel(status: RunStatus) {
+  switch (status) {
+    case "failed":
+      return "Failed";
+    case "interrupted":
+      return "Interrupted";
+    case "running":
+      return "Running";
+    case "pending":
+      return "Pending";
+    default:
+      return "Synced";
+  }
+}
+
+function runStatusChipClassName(status: RunStatus) {
+  switch (status) {
+    case "failed":
+      return "border-[var(--danger)]/18 bg-[rgba(159,18,57,0.08)] text-[var(--danger)]";
+    case "interrupted":
+      return "border-[rgba(120,53,15,0.18)] bg-[rgba(120,53,15,0.08)] text-[#78350f]";
+    case "running":
+      return "border-[var(--teal)]/18 bg-[rgba(14,77,100,0.08)] text-[var(--teal)]";
+    case "pending":
+      return "border-[var(--accent)]/18 bg-[rgba(154,52,18,0.08)] text-[var(--accent)]";
+    default:
+      return "border-[var(--ink)]/10 bg-[rgba(17,19,18,0.05)] text-[var(--muted-strong)]";
+  }
 }
 
 function formatDateTimeLabel(value: string | null) {
@@ -323,8 +389,79 @@ function buildOptimisticIngestRun(id: string): IngestionRunHistoryEntry {
         message: "Ingest request sent. Waiting for the worker to start.",
       },
     ],
+    steps: [],
     source_stats: [],
     errors: [],
+    output_paths: [],
+    changed_file_count: 0,
+  };
+}
+
+function sortRunsByStartedAtDesc(runs: IngestionRunHistoryEntry[]) {
+  return [...runs].sort((left, right) => new Date(right.started_at).getTime() - new Date(left.started_at).getTime());
+}
+
+function buildOptimisticSourceLatestRun(
+  source: Source,
+  id: string,
+  startedAt: string,
+): NonNullable<Source["latest_extraction_run"]> {
+  return {
+    id,
+    status: "running",
+    operation_kind: "raw_fetch",
+    summary: `Running source inject for ${source.name}.`,
+    started_at: startedAt,
+    finished_at: null,
+    emitted_kinds:
+      source.latest_extraction_run?.emitted_kinds.length
+        ? source.latest_extraction_run.emitted_kinds
+        : [source.raw_kind],
+  };
+}
+
+function buildOptimisticSourceInjectRun(source: Source, id: string, startedAt: string): IngestionRunHistoryEntry {
+  return {
+    id,
+    run_type: "ingest",
+    status: "running",
+    operation_kind: "raw_fetch",
+    trigger: "manual_source_fetch",
+    title: `Source inject · ${source.name}`,
+    summary: `Running source inject for ${source.name}.`,
+    started_at: startedAt,
+    finished_at: null,
+    affected_edition_days: [],
+    total_titles: 0,
+    source_count: 1,
+    failed_source_count: 0,
+    created_count: 0,
+    updated_count: 0,
+    duplicate_mention_count: 0,
+    extractor_fallback_count: 0,
+    ai_prompt_tokens: 0,
+    ai_completion_tokens: 0,
+    ai_total_tokens: 0,
+    ai_cost_usd: 0,
+    tts_cost_usd: 0,
+    total_cost_usd: 0,
+    average_extraction_confidence: null,
+    basic_info: [
+      { label: "Source", value: source.name },
+      { label: "Status", value: "Waiting for the latest extraction log" },
+    ],
+    logs: [
+      {
+        logged_at: startedAt,
+        level: "info",
+        message: `Source inject requested for ${source.name}. Waiting for the worker to finish.`,
+      },
+    ],
+    steps: [],
+    source_stats: [],
+    errors: [],
+    output_paths: [],
+    changed_file_count: 0,
   };
 }
 
@@ -395,6 +532,8 @@ function formatRunStatusLabel(status: RunStatus) {
   switch (status) {
     case "failed":
       return "Failure";
+    case "interrupted":
+      return "Interrupted";
     case "running":
       return "Running";
     case "pending":
@@ -410,6 +549,11 @@ function formatBriefDayLabel(value: string) {
     day: "numeric",
     year: "numeric",
   }).format(new Date(`${value}T12:00:00`));
+}
+
+function formatEditionTargetLabel(value: string) {
+  const [year, month, day] = value.split("-");
+  return `${Number(day)}/${month}/${year}`;
 }
 
 export function ConnectionsPage() {
@@ -442,6 +586,8 @@ export function ConnectionsPage() {
   const [probingSourceIds, setProbingSourceIds] = useState<Record<string, boolean>>({});
   const [removingSourceId, setRemovingSourceId] = useState<string | null>(null);
   const [togglingSourceId, setTogglingSourceId] = useState<string | null>(null);
+  const [injectingSourceId, setInjectingSourceId] = useState<string | null>(null);
+  const [loadingLatestLogSourceId, setLoadingLatestLogSourceId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [regenerateBriefDate, setRegenerateBriefDate] = useState("");
   const [gmailEmail, setGmailEmail] = useState("");
@@ -779,6 +925,13 @@ export function ConnectionsPage() {
   const gmailState = searchParams.get("gmail");
   const gmailReason = searchParams.get("reason");
   const gmailOauthConfigured = capabilitiesQuery.data?.gmail_oauth_configured ?? false;
+  const gmailOauthRedirectUri = (() => {
+    try {
+      return new URL(api.oauthUrl("/connections/gmail/oauth/callback"), window.location.href).toString();
+    } catch {
+      return "/api/connections/gmail/oauth/callback";
+    }
+  })();
   const gmailConnectedEmail =
     typeof gmailQuery.data?.metadata_json.connected_email === "string"
       ? gmailQuery.data.metadata_json.connected_email
@@ -840,6 +993,13 @@ export function ConnectionsPage() {
     setConnectionPanels((current) => ({ ...current, [panel]: !current[panel] }));
   };
 
+  const upsertRunInHistoryCache = (run: IngestionRunHistoryEntry) => {
+    queryClient.setQueryData<IngestionRunHistoryEntry[]>(["ops", "ingestion-runs"], (current = []) => {
+      const rest = current.filter((entry) => entry.id !== run.id);
+      return sortRunsByStartedAtDesc([run, ...rest]);
+    });
+  };
+
   const startEditingSource = (source: Source) => {
     setEditingSourceId(source.id);
     setSourceForm(mapSourceToForm(source));
@@ -853,10 +1013,10 @@ export function ConnectionsPage() {
       return {
         ...current,
         type,
-        url: type === "rss" || type === "arxiv" ? current.url : "",
-        website: type === "rss" ? current.website : "",
-        query: type === "gmail_newsletter" || type === "arxiv" ? current.query : "",
-        tags: type === "arxiv" ? current.tags : "",
+        rawKind: type === "gmail_newsletter" ? "newsletter" : current.rawKind === "newsletter" ? "blog-post" : current.rawKind,
+        url: type === "website" ? current.url : "",
+        website: type === "website" ? current.website : "",
+        query: type === "gmail_newsletter" ? current.query : "",
       };
     });
   };
@@ -900,6 +1060,65 @@ export function ConnectionsPage() {
     }
   };
 
+  const handleInjectSource = async (source: Source) => {
+    setSourceNotice(null);
+    setInjectingSourceId(source.id);
+    await queryClient.cancelQueries({ queryKey: ["sources"] });
+    await queryClient.cancelQueries({ queryKey: ["ops", "ingestion-runs"] });
+    const previousSources = queryClient.getQueryData<Source[]>(["sources"]);
+    const previousRuns = queryClient.getQueryData<IngestionRunHistoryEntry[]>(["ops", "ingestion-runs"]);
+    const optimisticRunId = `optimistic-source-inject-${source.id}-${Date.now()}`;
+    const startedAt = new Date().toISOString();
+    const optimisticLatestRun = buildOptimisticSourceLatestRun(source, optimisticRunId, startedAt);
+    const optimisticRun = buildOptimisticSourceInjectRun(source, optimisticRunId, startedAt);
+
+    queryClient.setQueryData<Source[]>(["sources"], (current = []) =>
+      current.map((entry) =>
+        entry.id === source.id
+          ? {
+              ...entry,
+              latest_extraction_run: optimisticLatestRun,
+            }
+          : entry,
+      ),
+    );
+    queryClient.setQueryData<IngestionRunHistoryEntry[]>(["ops", "ingestion-runs"], (current = []) =>
+      sortRunsByStartedAtDesc([optimisticRun, ...current.filter((run) => run.id !== optimisticRunId)]),
+    );
+    try {
+      const response = await api.injectSource(source.id);
+      setSourceNotice({ tone: "success", message: response.detail });
+      await refreshAll();
+      if (response.operation_run_id) {
+        setSelectedRunId(response.operation_run_id);
+      }
+    } catch (error) {
+      if (previousSources) {
+        queryClient.setQueryData(["sources"], previousSources);
+      }
+      if (previousRuns) {
+        queryClient.setQueryData(["ops", "ingestion-runs"], previousRuns);
+      }
+      setSourceNotice({ tone: "error", message: readErrorMessage(error) });
+    } finally {
+      setInjectingSourceId(null);
+    }
+  };
+
+  const handleOpenLatestLog = async (source: Source) => {
+    setSourceNotice(null);
+    setLoadingLatestLogSourceId(source.id);
+    try {
+      const response = await api.getSourceLatestLog(source.id);
+      upsertRunInHistoryCache(response.run);
+      setSelectedRunId(response.run.id);
+    } catch (error) {
+      setSourceNotice({ tone: "error", message: readErrorMessage(error) });
+    } finally {
+      setLoadingLatestLogSourceId(null);
+    }
+  };
+
   const handleClearContent = () => {
     if (
       !window.confirm(
@@ -916,8 +1135,10 @@ export function ConnectionsPage() {
 
     const trimmedName = sourceForm.name.trim();
     const trimmedUrl = sourceForm.url.trim();
+    const trimmedWebsite = sourceForm.website.trim();
     const trimmedQuery = sourceForm.query.trim();
-    const priority = Number.parseInt(sourceForm.priority, 10);
+    const maxItems = Number.parseInt(sourceForm.maxItems, 10);
+    const rawKind = sourceForm.type === "gmail_newsletter" ? "newsletter" : sourceForm.rawKind;
 
     if (!trimmedName) {
       setSourceNotice({ tone: "error", message: "Source name is required." });
@@ -927,30 +1148,37 @@ export function ConnectionsPage() {
       setSourceNotice({ tone: "error", message: "Provide the sender email or Gmail query for this source." });
       return;
     }
-    if (sourceForm.type === "rss" && !trimmedUrl) {
-      setSourceNotice({ tone: "error", message: "Provide the RSS feed URL for this source." });
+    if (sourceForm.type === "website" && !trimmedUrl) {
+      setSourceNotice({ tone: "error", message: "Provide the feed or index URL for this source." });
       return;
     }
-    if (sourceForm.type === "arxiv" && !trimmedUrl && !trimmedQuery) {
-      setSourceNotice({ tone: "error", message: "Provide an arXiv feed URL or search query." });
+    if (!rawKind.trim()) {
+      setSourceNotice({ tone: "error", message: "Choose the raw document kind this source should write." });
       return;
     }
-    if (Number.isNaN(priority) || priority < 0 || priority > 100) {
-      setSourceNotice({ tone: "error", message: "Priority must be a number between 0 and 100." });
+    if (Number.isNaN(maxItems) || maxItems < 1 || maxItems > 100) {
+      setSourceNotice({ tone: "error", message: "Max items must be a number between 1 and 100." });
       return;
     }
 
     setSourceNotice(null);
     const payload = {
       name: trimmedName,
-      url: trimmedUrl || null,
-      query: trimmedQuery || null,
+      raw_kind: rawKind,
+      url: sourceForm.type === "website" ? trimmedUrl || null : null,
+      query: sourceForm.type === "gmail_newsletter" ? trimmedQuery || null : null,
       description: sourceForm.description.trim() || null,
-      priority,
+      max_items: maxItems,
       tags: csvToList(sourceForm.tags),
       active: sourceForm.active,
-      config_json: buildSourceConfig(sourceForm, editingSource?.config_json ?? {}),
-      ...(editingSourceId && sourceForm.type === "gmail_newsletter" ? { rules: [] } : {}),
+      config_json: buildSourceConfig(
+        {
+          ...sourceForm,
+          website: trimmedWebsite,
+          query: trimmedQuery,
+        },
+        editingSource?.config_json ?? {},
+      ),
     };
 
     if (editingSourceId) {
@@ -961,7 +1189,6 @@ export function ConnectionsPage() {
     createSource.mutate({
       ...payload,
       type: sourceForm.type,
-      rules: [],
     });
   };
 
@@ -992,7 +1219,7 @@ export function ConnectionsPage() {
                 <article className="rounded-[1.45rem] border border-[var(--ink)]/8 bg-[rgba(255,255,255,0.52)] px-4 py-4">
                   <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">Operations</p>
                   <p className="mt-3 font-display text-3xl leading-none text-[var(--ink)]">{String(recentOperationCount).padStart(2, "0")}</p>
-                  <p className="mt-2 text-sm leading-6 text-[var(--muted)]">recent ingest, brief, and audio runs</p>
+                  <p className="mt-2 text-sm leading-6 text-[var(--muted)]">recent source, ingest, brief, and audio runs</p>
                 </article>
               </div>
             </div>
@@ -1071,6 +1298,20 @@ export function ConnectionsPage() {
                       <SkimmableText className="mt-3 text-sm leading-6 text-[var(--muted)]">
                         Use OAuth for the most durable hosted connection. If OAuth is not configured in this environment, fall back to a Gmail app password instead.
                       </SkimmableText>
+                      {!gmailOauthConfigured ? (
+                        <div className="mt-4 rounded-2xl border border-[var(--ink)]/8 bg-[rgba(255,255,255,0.72)] px-4 py-4 text-sm leading-6 text-[var(--muted-strong)]">
+                          <p>
+                            This button stays disabled until the backend sets <code>GMAIL_OAUTH_CLIENT_ID</code> and <code>GMAIL_OAUTH_CLIENT_SECRET</code> in
+                            <code> apps/backend/.env</code> and restarts.
+                          </p>
+                          <p className="mt-3">
+                            In Google Cloud, add this authorized redirect URI:
+                          </p>
+                          <code className="mt-2 block break-all rounded-xl border border-[var(--ink)]/8 bg-white/80 px-3 py-2 font-mono text-xs text-[var(--ink)]">
+                            {gmailOauthRedirectUri}
+                          </code>
+                        </div>
+                      ) : null}
                       <div className="mt-5">
                         <button
                           className={`secondary-button ${gmailOauthConfigured ? "" : "cursor-not-allowed opacity-60"}`}
@@ -1265,7 +1506,7 @@ export function ConnectionsPage() {
               <p className="section-kicker">Sources</p>
               <h3 className="section-title">Current list of sources</h3>
               <SkimmableText className="mt-4 max-w-4xl text-base leading-7 text-[var(--muted)]">
-                Review every feed in one place, patch noisy locators, pause ingest without losing context, and register new sources below the current queue.
+                Review every feed in one place, preview locators, run a single-source inject, inspect the latest extraction log, pause ingest without losing context, and register new sources below the current queue.
               </SkimmableText>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -1302,6 +1543,9 @@ export function ConnectionsPage() {
                   const locatorEntries = getSourceLocatorEntries(source);
                   const probeReport = sourceProbeReports[source.id];
                   const isProbingSource = Boolean(probingSourceIds[source.id]);
+                  const isInjectingSource = injectingSourceId === source.id;
+                  const isLoadingLatestLog = loadingLatestLogSourceId === source.id;
+                  const latestExtractionRun = source.latest_extraction_run;
 
                   return (
                     <article
@@ -1328,12 +1572,35 @@ export function ConnectionsPage() {
                             <span className="rounded-full border border-[var(--ink)]/8 bg-[rgba(255,255,255,0.74)] px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">
                               {formatSourceTypeLabel(source.type)}
                             </span>
+                            <span className="rounded-full border border-[var(--ink)]/8 bg-[rgba(255,255,255,0.74)] px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">
+                              {formatRawKindLabel(source.raw_kind)}
+                            </span>
+                            <span className="rounded-full border border-[var(--ink)]/8 bg-[rgba(255,255,255,0.74)] px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--muted)]">
+                              Max {source.max_items}
+                            </span>
+                            {source.has_custom_pipeline ? (
+                              <span
+                                className="inline-flex items-center gap-1.5 rounded-full border border-[rgba(154,52,18,0.14)] bg-[rgba(154,52,18,0.08)] px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--accent)]"
+                                title={source.custom_pipeline_id ?? "Custom pipeline"}
+                              >
+                                <Workflow className="h-3.5 w-3.5" />
+                                <span>Custom pipeline</span>
+                              </span>
+                            ) : null}
                           </div>
                           {source.description ? <p className="mt-2.5 text-sm leading-6 text-[var(--muted)]">{source.description}</p> : null}
                         </div>
-                        <div className="rounded-full border border-[var(--ink)]/8 bg-[rgba(255,255,255,0.7)] px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--muted)]">
-                          Priority {source.priority}
-                        </div>
+                        {latestExtractionRun ? (
+                          <span
+                            className={`rounded-full border px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] ${runStatusChipClassName(latestExtractionRun.status)}`}
+                          >
+                            {formatRunStatusChipLabel(latestExtractionRun.status)}
+                          </span>
+                        ) : (
+                          <span className="rounded-full border border-[var(--ink)]/8 bg-[rgba(255,255,255,0.7)] px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--muted)]">
+                            No extraction yet
+                          </span>
+                        )}
                       </div>
 
                       {locatorEntries.length ? (
@@ -1363,18 +1630,60 @@ export function ConnectionsPage() {
                         </span>
                       </div>
 
+                      <div className="mt-3 rounded-[1.25rem] border border-[var(--ink)]/8 bg-[rgba(255,255,255,0.62)] px-3.5 py-3.5">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="min-w-0">
+                            <p className="field-label">Latest extraction</p>
+                            <p className="mt-1.5 text-sm leading-6 text-[var(--ink)]">
+                              {latestExtractionRun ? latestExtractionRun.summary : "No source-specific extraction run has been recorded yet."}
+                            </p>
+                          </div>
+                          {latestExtractionRun ? (
+                            <span
+                              className={`w-fit rounded-full border px-3 py-1 font-mono text-[10px] uppercase tracking-[0.16em] ${runStatusChipClassName(latestExtractionRun.status)}`}
+                            >
+                              {formatRunStatusChipLabel(latestExtractionRun.status)}
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+                          {latestExtractionRun
+                            ? `Started ${formatDateTimeLabel(latestExtractionRun.started_at)}${latestExtractionRun.finished_at ? ` · Finished ${formatDateTimeLabel(latestExtractionRun.finished_at)}` : ""}`
+                            : "Use Inject source to run this source on demand and create its first extraction log."}
+                        </p>
+                      </div>
+
                       <div className="mt-4 flex flex-wrap gap-2">
                         <button
                           className="secondary-button px-2.5 py-1.5 text-[10px]"
-                          disabled={isProbingSource}
+                          disabled={isProbingSource || isInjectingSource}
                           onClick={() => handleProbeSource(source)}
                           type="button"
                         >
-                          {isProbingSource ? "Checking source..." : "Fetch source"}
+                          {isProbingSource ? "Previewing..." : "Preview source"}
                         </button>
                         <button
                           className="secondary-button px-2.5 py-1.5 text-[10px]"
-                          disabled={sourceMutationBusy}
+                          disabled={isInjectingSource || isLoadingLatestLog}
+                          onClick={() => handleInjectSource(source)}
+                          type="button"
+                        >
+                          <Play className="h-3.5 w-3.5" />
+                          {isInjectingSource ? "Injecting..." : "Inject source"}
+                        </button>
+                        <button
+                          className="secondary-button px-2.5 py-1.5 text-[10px]"
+                          disabled={isInjectingSource || isLoadingLatestLog || !latestExtractionRun}
+                          onClick={() => handleOpenLatestLog(source)}
+                          type="button"
+                          title={latestExtractionRun ? "Open the latest extraction log for this source" : "No extraction log yet"}
+                        >
+                          <History className="h-3.5 w-3.5" />
+                          {isLoadingLatestLog ? "Loading log..." : "Latest extraction log"}
+                        </button>
+                        <button
+                          className="secondary-button px-2.5 py-1.5 text-[10px]"
+                          disabled={sourceMutationBusy || isInjectingSource}
                           onClick={() => startEditingSource(source)}
                           type="button"
                         >
@@ -1382,7 +1691,7 @@ export function ConnectionsPage() {
                         </button>
                         <button
                           className={`secondary-button px-2.5 py-1.5 text-[10px] ${source.active ? "" : "filter-pill-active"}`}
-                          disabled={sourceMutationBusy}
+                          disabled={sourceMutationBusy || isInjectingSource}
                           onClick={() => handleToggleSource(source)}
                           type="button"
                         >
@@ -1390,7 +1699,7 @@ export function ConnectionsPage() {
                         </button>
                         <button
                           className="secondary-button border-[var(--danger)]/22 px-2.5 py-1.5 text-[10px] text-[var(--danger)] hover:border-[var(--danger)]/38"
-                          disabled={sourceMutationBusy}
+                          disabled={sourceMutationBusy || isInjectingSource}
                           onClick={() => handleRemoveSource(source)}
                           type="button"
                         >
@@ -1468,24 +1777,33 @@ export function ConnectionsPage() {
                   : "Pick the source type first, then fill only the fields that matter for that feed."}
               </SkimmableText>
 
+              {editingSource?.has_custom_pipeline ? (
+                <div className="mt-4 rounded-[1.25rem] border border-[rgba(154,52,18,0.14)] bg-[rgba(154,52,18,0.08)] px-4 py-4">
+                  <div className="flex items-start gap-3">
+                    <Workflow className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent)]" />
+                    <div>
+                      <p className="field-label text-[var(--accent)]">Custom pipeline</p>
+                      <p className="mt-1.5 text-sm leading-6 text-[var(--muted-strong)]">
+                        This source uses the dedicated extraction pipeline <code>{editingSource.custom_pipeline_id}</code>.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
               <div className="mt-5">
                 <p className="field-label">Source type</p>
-                <div className={`mt-3 grid gap-3 md:grid-cols-3 ${editingSourceId ? "opacity-65" : ""}`}>
+                <div className={`mt-3 grid gap-3 md:grid-cols-2 ${editingSourceId ? "opacity-65" : ""}`}>
                   {[
+                    {
+                      type: "website" as const,
+                      label: "Website",
+                      description: "RSS feeds or index pages that write blog posts, articles, papers, threads, or signals into raw/.",
+                    },
                     {
                       type: "gmail_newsletter" as const,
                       label: "Gmail",
                       description: "One sender or Gmail search query per source.",
-                    },
-                    {
-                      type: "arxiv" as const,
-                      label: "arXiv",
-                      description: "Keep the current research query and tagging flow.",
-                    },
-                    {
-                      type: "rss" as const,
-                      label: "RSS",
-                      description: "Store the feed URL and the publication website together.",
                     },
                   ].map((option) => {
                     const selected = sourceForm.type === option.type;
@@ -1521,43 +1839,125 @@ export function ConnectionsPage() {
                     placeholder={
                       sourceForm.type === "gmail_newsletter"
                         ? "TLDR AI"
-                        : sourceForm.type === "rss"
-                          ? "OpenAI News"
-                          : "Frontier AI Papers"
+                        : sourceForm.rawKind === "paper"
+                          ? "AlphaXiv Papers"
+                          : "OpenAI News"
                     }
                     value={sourceForm.name}
                   />
                 </label>
                 <label>
-                  <span className="field-label">Priority</span>
+                  <span className="field-label">Max items per run</span>
                   <input
                     className="field-input min-h-[2.75rem] rounded-[1rem] px-4 py-3 text-sm"
                     inputMode="numeric"
                     onChange={(event) => {
                       if (sourceNotice) setSourceNotice(null);
-                      setSourceForm({ ...sourceForm, priority: event.target.value });
+                      setSourceForm({ ...sourceForm, maxItems: event.target.value });
                     }}
-                    placeholder="60"
-                    value={sourceForm.priority}
+                    placeholder="20"
+                    value={sourceForm.maxItems}
+                  />
+                </label>
+                <label>
+                  <span className="field-label">Raw document kind</span>
+                  <select
+                    className="field-input min-h-[2.75rem] rounded-[1rem] px-4 py-3 text-sm"
+                    disabled={sourceForm.type === "gmail_newsletter"}
+                    onChange={(event) => {
+                      if (sourceNotice) setSourceNotice(null);
+                      setSourceForm({ ...sourceForm, rawKind: event.target.value as SourceRawKind });
+                    }}
+                    value={sourceForm.type === "gmail_newsletter" ? "newsletter" : sourceForm.rawKind}
+                  >
+                    {sourceForm.type === "gmail_newsletter" ? (
+                      <option value="newsletter">Newsletter</option>
+                    ) : (
+                      <>
+                        <option value="blog-post">Blog post</option>
+                        <option value="article">Article</option>
+                        <option value="paper">Paper</option>
+                        <option value="thread">Thread</option>
+                        <option value="signal">Signal</option>
+                      </>
+                    )}
+                  </select>
+                  <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+                    {sourceForm.type === "gmail_newsletter"
+                      ? "Gmail sources always write newsletter raw documents."
+                      : "Use paper for AlphaXiv-style research feeds and blog post for company news sites."}
+                  </p>
+                </label>
+                <label>
+                  <span className="field-label">Tags</span>
+                  <input
+                    className="field-input min-h-[2.75rem] rounded-[1rem] px-4 py-3 text-sm"
+                    onChange={(event) => {
+                      if (sourceNotice) setSourceNotice(null);
+                      setSourceForm({ ...sourceForm, tags: event.target.value });
+                    }}
+                    placeholder="openai, official, research"
+                    value={sourceForm.tags}
                   />
                 </label>
 
-                {sourceForm.type === "rss" ? (
+                {sourceForm.type === "website" ? (
                   <>
+                    <div className="sm:col-span-2">
+                      <span className="field-label">Discovery mode</span>
+                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                        {[
+                          {
+                            value: "rss_feed" as const,
+                            label: "RSS / feed",
+                            description: "Read an Atom or RSS feed directly.",
+                          },
+                          {
+                            value: "website_index" as const,
+                            label: "Website index",
+                            description: "Crawl an index page and extract matching links.",
+                          },
+                        ].map((option) => {
+                          const selected = sourceForm.discoveryMode === option.value;
+                          return (
+                            <button
+                              key={option.value}
+                              className={`rounded-[1.25rem] border px-4 py-3 text-left transition ${
+                                selected
+                                  ? "border-[var(--accent)]/32 bg-[rgba(154,52,18,0.08)] shadow-[0_12px_26px_rgba(154,52,18,0.08)]"
+                                  : "border-[var(--ink)]/8 bg-[rgba(255,255,255,0.58)] hover:border-[var(--accent)]/18"
+                              }`}
+                              onClick={() => {
+                                if (sourceNotice) setSourceNotice(null);
+                                setSourceForm({ ...sourceForm, discoveryMode: option.value });
+                              }}
+                              type="button"
+                            >
+                              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-[var(--muted-strong)]">{option.label}</p>
+                              <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{option.description}</p>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                     <label>
-                      <span className="field-label">RSS URL</span>
+                      <span className="field-label">{sourceForm.discoveryMode === "website_index" ? "Index URL" : "Feed URL"}</span>
                       <input
                         className="field-input min-h-[2.75rem] rounded-[1rem] px-4 py-3 text-sm"
                         onChange={(event) => {
                           if (sourceNotice) setSourceNotice(null);
                           setSourceForm({ ...sourceForm, url: event.target.value });
                         }}
-                        placeholder="https://example.com/feed.xml"
+                        placeholder={
+                          sourceForm.discoveryMode === "website_index"
+                            ? "https://www.anthropic.com/research"
+                            : "https://openai.com/news/rss.xml"
+                        }
                         value={sourceForm.url}
                       />
                     </label>
                     <label>
-                      <span className="field-label">Website</span>
+                      <span className="field-label">Website home (optional)</span>
                       <input
                         className="field-input min-h-[2.75rem] rounded-[1rem] px-4 py-3 text-sm"
                         onChange={(event) => {
@@ -1576,7 +1976,11 @@ export function ConnectionsPage() {
                           if (sourceNotice) setSourceNotice(null);
                           setSourceForm({ ...sourceForm, description: event.target.value });
                         }}
-                        placeholder="What should be extracted from this site or feed?"
+                        placeholder={
+                          sourceForm.rawKind === "paper"
+                            ? "Capture the paper metadata, abstract, claims, methods, and links for each research entry."
+                            : "What should be extracted from this site or feed?"
+                        }
                         value={sourceForm.description}
                       />
                     </label>
@@ -1609,59 +2013,6 @@ export function ConnectionsPage() {
                           setSourceForm({ ...sourceForm, description: event.target.value });
                         }}
                         placeholder="Summarize product launches, research links, benchmarks, and notable opinions from this newsletter."
-                        value={sourceForm.description}
-                      />
-                    </label>
-                  </>
-                ) : null}
-
-                {sourceForm.type === "arxiv" ? (
-                  <>
-                    <label>
-                      <span className="field-label">Feed URL</span>
-                      <input
-                        className="field-input min-h-[2.75rem] rounded-[1rem] px-4 py-3 text-sm"
-                        onChange={(event) => {
-                          if (sourceNotice) setSourceNotice(null);
-                          setSourceForm({ ...sourceForm, url: event.target.value });
-                        }}
-                        placeholder="https://export.arxiv.org/api/query?search_query=cat:cs.AI"
-                        value={sourceForm.url}
-                      />
-                    </label>
-                    <label>
-                      <span className="field-label">Query</span>
-                      <input
-                        className="field-input min-h-[2.75rem] rounded-[1rem] px-4 py-3 text-sm"
-                        onChange={(event) => {
-                          if (sourceNotice) setSourceNotice(null);
-                          setSourceForm({ ...sourceForm, query: event.target.value });
-                        }}
-                        placeholder='cat:cs.AI OR all:"language model"'
-                        value={sourceForm.query}
-                      />
-                    </label>
-                    <label className="sm:col-span-2">
-                      <span className="field-label">Tags</span>
-                      <input
-                        className="field-input min-h-[2.75rem] rounded-[1rem] px-4 py-3 text-sm"
-                        onChange={(event) => {
-                          if (sourceNotice) setSourceNotice(null);
-                          setSourceForm({ ...sourceForm, tags: event.target.value });
-                        }}
-                        placeholder="papers, frontier, research"
-                        value={sourceForm.tags}
-                      />
-                    </label>
-                    <label className="sm:col-span-2">
-                      <span className="field-label">Description</span>
-                      <textarea
-                        className="field-input min-h-28 rounded-[1rem] px-4 py-3 text-sm"
-                        onChange={(event) => {
-                          if (sourceNotice) setSourceNotice(null);
-                          setSourceForm({ ...sourceForm, description: event.target.value });
-                        }}
-                        placeholder="What this source is meant to catch."
                         value={sourceForm.description}
                       />
                     </label>
@@ -1716,7 +2067,7 @@ export function ConnectionsPage() {
               <p className="section-kicker">Recent operations</p>
               <h3 className="section-title">Operational history</h3>
               <SkimmableText className="mt-4 max-w-4xl text-base leading-7 text-[var(--muted)]">
-                Review the execution log across ingest cycles, brief generation, and audio generation, including the edition coverage each run touched and the estimated LLM plus voice spend behind it.
+                Review the execution log across source extracts, ingest cycles, brief generation, and audio generation, including the edition coverage each run touched and the estimated LLM plus voice spend behind it.
               </SkimmableText>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -1781,7 +2132,7 @@ export function ConnectionsPage() {
               >
                 {regenerateOptions.map((option) => (
                   <option key={option.brief_date} value={option.brief_date}>
-                    {`${formatBriefDayLabel(option.brief_date)} · covers ${formatBriefDayLabel(option.coverage_start)}`}
+                    {formatEditionTargetLabel(option.brief_date)}
                   </option>
                 ))}
               </select>

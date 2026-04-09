@@ -41,6 +41,19 @@ DEFAULT_TASK_DURATION_BUCKETS = (
     60.0,
     300.0,
 )
+DEFAULT_LLM_REQUEST_DURATION_BUCKETS = (
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
+    20.0,
+    30.0,
+    60.0,
+)
 _UUID_SEGMENT_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
@@ -409,6 +422,37 @@ TASK_DURATION_SECONDS = _REGISTRY.histogram(
     buckets=DEFAULT_TASK_DURATION_BUCKETS,
     label_names=("task", "outcome"),
 )
+LLM_REQUESTS_TOTAL = _REGISTRY.counter(
+    "research_center_llm_requests_total",
+    "Total number of LLM invocations.",
+    label_names=("provider", "model", "operation", "status"),
+)
+LLM_REQUEST_DURATION_SECONDS = _REGISTRY.histogram(
+    "research_center_llm_request_duration_seconds",
+    "LLM invocation duration in seconds.",
+    buckets=DEFAULT_LLM_REQUEST_DURATION_BUCKETS,
+    label_names=("provider", "model", "operation", "status"),
+)
+LLM_TOKENS_TOTAL = _REGISTRY.counter(
+    "research_center_llm_tokens_total",
+    "Total LLM tokens processed.",
+    label_names=("provider", "model", "operation", "token_type"),
+)
+LLM_COST_USD_TOTAL = _REGISTRY.counter(
+    "research_center_llm_cost_usd_total",
+    "Estimated or actual LLM cost in USD.",
+    label_names=("provider", "model", "operation"),
+)
+LLM_FAILURES_TOTAL = _REGISTRY.counter(
+    "research_center_llm_failures_total",
+    "LLM invocation failures by reason.",
+    label_names=("provider", "model", "operation", "reason"),
+)
+LLM_FALLBACKS_TOTAL = _REGISTRY.counter(
+    "research_center_llm_fallbacks_total",
+    "Fallbacks taken after an LLM invocation could not complete normally.",
+    label_names=("operation", "reason"),
+)
 
 
 def reset_metrics() -> None:
@@ -487,6 +531,69 @@ def track_task_metrics(task_name: str) -> Iterator[Callable[[str], None]]:
             outcome=outcome,
         )
         TASKS_IN_PROGRESS.dec(task=task_name)
+
+
+def record_llm_invocation(
+    *,
+    provider: str,
+    model: str,
+    operation: str,
+    status: str,
+    duration_seconds: float,
+    usage: dict[str, int] | None = None,
+    cost_usd: float | None = None,
+    failure_reason: str | None = None,
+) -> None:
+    normalized_provider = provider or "unknown"
+    normalized_model = model or "unknown"
+    normalized_operation = operation or "unknown"
+    normalized_status = status or "unknown"
+
+    LLM_REQUESTS_TOTAL.inc(
+        provider=normalized_provider,
+        model=normalized_model,
+        operation=normalized_operation,
+        status=normalized_status,
+    )
+    LLM_REQUEST_DURATION_SECONDS.observe(
+        duration_seconds,
+        provider=normalized_provider,
+        model=normalized_model,
+        operation=normalized_operation,
+        status=normalized_status,
+    )
+
+    normalized_usage = usage or {}
+    for token_type in ("prompt", "completion", "total"):
+        amount = max(0, int(normalized_usage.get(f"{token_type}_tokens", 0)))
+        if amount:
+            LLM_TOKENS_TOTAL.inc(
+                amount,
+                provider=normalized_provider,
+                model=normalized_model,
+                operation=normalized_operation,
+                token_type=token_type,
+            )
+
+    if cost_usd and cost_usd > 0:
+        LLM_COST_USD_TOTAL.inc(
+            cost_usd,
+            provider=normalized_provider,
+            model=normalized_model,
+            operation=normalized_operation,
+        )
+
+    if failure_reason:
+        LLM_FAILURES_TOTAL.inc(
+            provider=normalized_provider,
+            model=normalized_model,
+            operation=normalized_operation,
+            reason=failure_reason,
+        )
+
+
+def record_llm_fallback(*, operation: str, reason: str) -> None:
+    LLM_FALLBACKS_TOTAL.inc(operation=operation or "unknown", reason=reason or "unknown")
 
 
 def _request_token_matches(

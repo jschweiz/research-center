@@ -1,0 +1,7 @@
+{
+  "mode": "local",
+  "apiBaseUrl": "/api",
+  "pairedLocalUrl": "http://mac.local:8000",
+  "hostedViewerUrl": null,
+  "cloudKit": null
+}

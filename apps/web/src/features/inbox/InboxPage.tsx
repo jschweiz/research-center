@@ -12,8 +12,6 @@ const filters = [
   { label: "All", status: undefined, type: undefined },
   { label: "Papers", status: undefined, type: "paper" },
   { label: "Newsletters", status: undefined, type: "newsletter" },
-  { label: "Saved", status: "saved", type: undefined },
-  { label: "Needs Review", status: "needs_review", type: undefined },
   { label: "Archived", status: "archived", type: undefined },
 ];
 
@@ -56,8 +54,9 @@ export function InboxPage() {
   });
 
   const heading = useMemo(() => {
-    if (selected.label === "Needs Review") return "Items that need metadata review or a retry before they should hit Zotero.";
-    if (selected.label === "Saved") return "Items already exported or marked as keepers.";
+    if (selected.label === "Papers") return "Research papers filed into the vault, ranked and ready for a closer read.";
+    if (selected.label === "Newsletters") return "Newsletter issues and email digests captured from configured sources.";
+    if (selected.label === "Archived") return "Items you explicitly removed from the active working queue.";
     return "Browse beyond the brief, filter the stream, and keep the queue under control.";
   }, [selected.label]);
 
@@ -68,8 +67,6 @@ export function InboxPage() {
       return `No items from ${sourceName} are available for this view yet.`;
     }
     if (selected.label === "Newsletters") return "No newsletter items have been ingested yet.";
-    if (selected.label === "Saved") return "Nothing has been saved yet.";
-    if (selected.label === "Needs Review") return "Nothing needs review right now.";
     if (selected.label === "Archived") return "No archived items yet.";
     return "No items are available for this view yet.";
   }, [query, selected.label, sourceId, sourcesQuery.data]);

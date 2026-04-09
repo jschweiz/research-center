@@ -1,0 +1,178 @@
+{
+  "availability": {
+    "days": [
+      {
+        "brief_date": "2026-04-08",
+        "coverage_end": "2026-04-07",
+        "coverage_start": "2026-04-07"
+      }
+    ],
+    "default_day": "2026-04-08",
+    "weeks": []
+  },
+  "available_editions": [
+    {
+      "brief_date": "2026-04-07",
+      "edition_id": "day:2026-04-07",
+      "generated_at": "2026-04-07T08:39:19.678310",
+      "has_audio": true,
+      "period_type": "day",
+      "published_at": "2026-04-07T08:39:19.694750Z",
+      "record_name": "PublishedEdition::day::2026-04-07",
+      "schema_version": 1,
+      "title": "Morning Brief \u2022 2026-04-07",
+      "week_end": null,
+      "week_start": null
+    }
+  ],
+  "digest": {
+    "audio_brief": {
+      "audio_duration_seconds": 42,
+      "audio_url": null,
+      "chapters": [
+        {
+          "headline": "Signal from the publishing test feed",
+          "item_id": "96500ba3-cf51-4ff0-a945-a4876f219b0c",
+          "item_title": "Signal from the publishing test feed",
+          "narration": "Synthetic narration.",
+          "offset_seconds": 0,
+          "rank": 1,
+          "section": "editorial_shortlist"
+        }
+      ],
+      "error": null,
+      "estimated_duration_seconds": 30,
+      "generated_at": "2026-04-07T08:39:19.678310",
+      "metadata": {
+        "estimated_duration_seconds": 42
+      },
+      "provider": "fixture",
+      "script": "This is a synthetic audio script for the publication fixtures.",
+      "status": "succeeded",
+      "voice": "fixture-voice"
+    },
+    "brief_date": "2026-04-07",
+    "coverage_end": "2026-04-06",
+    "coverage_start": "2026-04-06",
+    "data_mode": "live",
+    "editorial_note": "Fixture editorial note.",
+    "editorial_shortlist": [
+      {
+        "item": {
+          "also_mentioned_in_count": 0,
+          "authors": [
+            "Research Center"
+          ],
+          "bucket": "worth_a_skim",
+          "canonical_url": "https://example.com/publishing-test-item",
+          "content_type": "article",
+          "extraction_confidence": 0.93,
+          "id": "96500ba3-cf51-4ff0-a945-a4876f219b0c",
+          "organization_name": "Example Labs",
+          "published_at": "2026-04-07T02:39:19.669464",
+          "reason_trace": {
+            "author_matches": 0,
+            "cluster_size": 1,
+            "favorite_source_match": false,
+            "heuristic_relevance_score": 0.9167,
+            "ignored_penalty": 0,
+            "recency_hours": 6.0,
+            "scoring_mode": "heuristic",
+            "source_priority": 80,
+            "topic_matches": 0
+          },
+          "short_summary": "A concise summary for publication tests.",
+          "source_name": "Publishing Feed",
+          "title": "Signal from the publishing test feed",
+          "total_score": 0.515
+        },
+        "note": "Fixture note, concise, publication tests",
+        "rank": 1
+      }
+    ],
+    "generated_at": "2026-04-07T08:39:19.678310",
+    "headlines": [],
+    "id": "89be2f88-2a9d-4cb0-b0cf-5ce93d830023",
+    "interesting_side_signals": [],
+    "papers_table": [],
+    "period_type": "day",
+    "remaining_reads": [],
+    "suggested_follow_ups": [
+      "Check publication metadata."
+    ],
+    "title": "Morning Brief \u2022 2026-04-07",
+    "week_end": null,
+    "week_start": null
+  },
+  "edition": {
+    "brief_date": "2026-04-07",
+    "edition_id": "day:2026-04-07",
+    "generated_at": "2026-04-07T08:39:19.678310",
+    "has_audio": true,
+    "period_type": "day",
+    "published_at": "2026-04-07T08:39:19.694750Z",
+    "record_name": "PublishedEdition::day::2026-04-07",
+    "schema_version": 1,
+    "title": "Morning Brief \u2022 2026-04-07",
+    "week_end": null,
+    "week_start": null
+  },
+  "items": {
+    "96500ba3-cf51-4ff0-a945-a4876f219b0c": {
+      "also_mentioned_in": [],
+      "authors": [
+        "Research Center"
+      ],
+      "canonical_url": "https://example.com/publishing-test-item",
+      "cleaned_text": "A compact article used to verify local publication and pairing flows.",
+      "content_type": "article",
+      "extraction_confidence": 0.93,
+      "id": "96500ba3-cf51-4ff0-a945-a4876f219b0c",
+      "insight": {
+        "caveats": "This is synthetic fixture data.",
+        "contribution": null,
+        "deeper_summary": null,
+        "experiment_ideas": [],
+        "follow_up_questions": [
+          "Did the publish operation strip private fields?"
+        ],
+        "limitation": null,
+        "method": null,
+        "possible_extension": null,
+        "result": null,
+        "short_summary": "A concise summary for publication tests.",
+        "whats_new": "The app now publishes a curated snapshot.",
+        "why_it_matters": "proves, published manifest, stays read-only"
+      },
+      "organization_name": "Example Labs",
+      "outbound_links": [
+        "https://example.com/related"
+      ],
+      "published_at": "2026-04-07T02:39:19.669464",
+      "score": {
+        "author_match_score": 0.0,
+        "bucket": "worth_a_skim",
+        "novelty_score": 0.8,
+        "reason_trace": {
+          "author_matches": 0,
+          "cluster_size": 1,
+          "favorite_source_match": false,
+          "heuristic_relevance_score": 0.9167,
+          "ignored_penalty": 0,
+          "recency_hours": 6.0,
+          "scoring_mode": "heuristic",
+          "source_priority": 80,
+          "topic_matches": 0
+        },
+        "relevance_score": 0.9167,
+        "source_quality_score": 0.8,
+        "topic_match_score": 0.0,
+        "total_score": 0.515,
+        "zotero_affinity_score": 0.0
+      },
+      "source_name": "Publishing Feed",
+      "title": "Signal from the publishing test feed"
+    }
+  },
+  "schema_version": 1
+}

@@ -1,21 +1,38 @@
 import type {
   ActionResponse,
+  AdvancedOutputKind,
   AudioBrief,
   BriefAvailability,
   Connection,
   ConnectionCapabilities,
+  CodexRuntimeStatus,
   Digest,
+  HealthCheckScope,
   IngestionRunHistoryEntry,
   ItemDetail,
   ItemListEntry,
   JobResponse,
   MeResponse,
+  PipelineStatus,
   Profile,
   Source,
+  SourceLatestLogResult,
   SourceProbeResult,
 } from "./types";
 
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000/api";
+let apiUrl = import.meta.env.VITE_API_URL ?? "http://localhost:8000/api";
+
+function normalizeApiUrl(value: string) {
+  return value.endsWith("/") ? value.slice(0, -1) : value;
+}
+
+export function configureApiClient(nextApiUrl: string) {
+  apiUrl = normalizeApiUrl(nextApiUrl);
+}
+
+export function getConfiguredApiUrl() {
+  return apiUrl;
+}
 
 export class ApiError extends Error {
   status: number;
@@ -72,7 +89,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetch(`${apiUrl}${path}`, {
     cache: init?.cache ?? "no-store",
     credentials: "include",
     headers,
@@ -113,7 +130,7 @@ export const api = {
   getWeekBrief: (weekStart: string) => request<Digest>(`/briefs/weeks/${weekStart}`),
   generateAudioSummary: (date: string) =>
     request<AudioBrief>(`/briefs/${date}/generate-audio-summary`, { method: "POST" }),
-  getAudioSummaryUrl: (date: string) => `${API_URL}/briefs/${date}/audio`,
+  getAudioSummaryUrl: (date: string) => `${apiUrl}/briefs/${date}/audio`,
 
   getItems: (params: { q?: string; status?: string; content_type?: string; source_id?: string; sort?: string }) => {
     const search = new URLSearchParams();
@@ -131,14 +148,6 @@ export const api = {
     }),
   archiveItem: (id: string) => request<ActionResponse>(`/items/${id}/archive`, { method: "POST" }),
   starItem: (id: string) => request<ActionResponse>(`/items/${id}/star`, { method: "POST" }),
-  ignoreSimilar: (id: string) => request<ActionResponse>(`/items/${id}/ignore-similar`, { method: "POST" }),
-  saveToZotero: (id: string, tags: string[]) =>
-    request<ActionResponse>(`/items/${id}/save-to-zotero`, {
-      method: "POST",
-      body: JSON.stringify({ tags }),
-    }),
-  generateDeeperSummary: (id: string) =>
-    request<JobResponse>(`/items/${id}/generate-deeper-summary`, { method: "POST" }),
 
   getSources: (params?: { includeManual?: boolean }) => {
     const search = new URLSearchParams();
@@ -149,6 +158,12 @@ export const api = {
   createSource: (payload: Record<string, unknown>) =>
     request<Source>("/sources", { method: "POST", body: JSON.stringify(payload) }),
   probeSource: (id: string) => request<SourceProbeResult>(`/sources/${id}/probe`, { method: "POST" }),
+  injectSource: (id: string, payload?: { max_items?: number }) =>
+    request<JobResponse>(`/sources/${id}/inject`, {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
+  getSourceLatestLog: (id: string) => request<SourceLatestLogResult>(`/sources/${id}/latest-log`),
   updateSource: (id: string, payload: Record<string, unknown>) =>
     request<Source>(`/sources/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteSource: (id: string) => request<void>(`/sources/${id}`, { method: "DELETE" }),
@@ -165,15 +180,59 @@ export const api = {
   updateProfile: (payload: Record<string, unknown>) =>
     request<Profile>("/profile", { method: "PATCH", body: JSON.stringify(payload) }),
 
+  runIngest: () => request<JobResponse>("/ops/run-ingest", { method: "POST" }),
+  fetchSources: () => request<JobResponse>("/ops/fetch-sources", { method: "POST" }),
+  lightweightEnrich: () => request<JobResponse>("/ops/lightweight-enrich", { method: "POST" }),
+  rebuildItemsIndex: () => request<JobResponse>("/ops/rebuild-items-index", { method: "POST" }),
+  getPipelineStatus: () => request<PipelineStatus>("/ops/pipeline-status"),
   ingestNow: () => request<JobResponse>("/ops/ingest-now", { method: "POST" }),
-  enrichAll: () => request<JobResponse>("/ops/enrich-all", { method: "POST" }),
+  syncSources: () => request<JobResponse>("/ops/sync-sources", { method: "POST" }),
+  rebuildIndex: () => request<JobResponse>("/ops/rebuild-index", { method: "POST" }),
+  enrichAll: () => request<JobResponse>("/ops/lightweight-enrich", { method: "POST" }),
+  compileWiki: (payload?: { source_id?: string; doc_id?: string; limit?: number }) =>
+    request<JobResponse>("/ops/compile-wiki", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
+  advancedCompile: (payload?: { source_id?: string; doc_id?: string; limit?: number }) =>
+    request<JobResponse>("/ops/advanced-compile", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
+  healthCheck: (payload?: { scope?: HealthCheckScope; topic?: string }) =>
+    request<JobResponse>("/ops/health-check", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
+  answerQuery: (payload: { question: string; output_kind: AdvancedOutputKind }) =>
+    request<JobResponse>("/ops/answer-query", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  fileOutput: (payload: { path: string }) =>
+    request<JobResponse>("/ops/file-output", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getAdvancedRuntime: () => request<CodexRuntimeStatus>("/ops/advanced-runtime"),
   regenerateBrief: (briefDate?: string) =>
     request<JobResponse>("/ops/regenerate-brief", {
       method: "POST",
       body: JSON.stringify(briefDate ? { brief_date: briefDate } : {}),
     }),
+  generateAudio: (briefDate?: string) =>
+    request<JobResponse>("/ops/generate-audio", {
+      method: "POST",
+      body: JSON.stringify(briefDate ? { brief_date: briefDate } : {}),
+    }),
+  publishLatest: (briefDate?: string) =>
+    request<JobResponse>("/ops/publish-latest", {
+      method: "POST",
+      body: JSON.stringify(briefDate ? { brief_date: briefDate } : {}),
+    }),
+  deepEnrichment: () => request<JobResponse>("/ops/deep-enrichment", { method: "POST" }),
   retryFailedJobs: () => request<JobResponse>("/ops/retry-failed-jobs", { method: "POST" }),
   clearContent: () => request<JobResponse>("/ops/clear-content", { method: "POST" }),
   getIngestionRuns: () => request<IngestionRunHistoryEntry[]>("/ops/ingestion-runs"),
-  oauthUrl: (path: string) => `${API_URL}${path}`,
+  oauthUrl: (path: string) => `${apiUrl}${path}`,
 };

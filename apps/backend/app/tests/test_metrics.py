@@ -49,7 +49,6 @@ def test_metrics_endpoint_requires_token_when_configured(
     monkeypatch.setenv("AUDIO_CACHE_DIR", str(tmp_path / "audio-cache"))
     monkeypatch.setenv("METRICS_ENABLED", "true")
     monkeypatch.setenv("METRICS_TOKEN", "metrics-secret")
-    monkeypatch.delenv("WORKER_METRICS_PORT", raising=False)
     get_settings.cache_clear()
     reset_engine_cache()
     reset_metrics()
@@ -84,8 +83,8 @@ def test_task_metrics_capture_success_and_skip(client: TestClient, monkeypatch) 
         lambda self: False,
     )
 
-    assert purge_raw_email_payloads_task.run() == 3
-    assert run_digest_task.run(only_if_due=True) == "skipped:not_due"
+    assert purge_raw_email_payloads_task() == 3
+    assert run_digest_task(only_if_due=True) == "skipped:not_due"
 
     metrics = render_metrics()
     assert (

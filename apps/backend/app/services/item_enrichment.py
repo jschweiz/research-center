@@ -321,6 +321,8 @@ class ItemEnrichmentService:
             "favorite_authors": profile.favorite_authors,
             "favorite_sources": profile.favorite_sources,
             "ignored_topics": profile.ignored_topics,
+            "prompt_guidance": profile.prompt_guidance if isinstance(profile.prompt_guidance, dict) else {},
+            "summary_depth": profile.summary_depth,
         }
 
     def _build_prompt_item(self, item: Item) -> dict[str, Any]:

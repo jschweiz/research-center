@@ -1,8 +1,15 @@
 import importlib
+import json
+import logging
+from pathlib import Path
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
+from app.core.logging import bind_log_context, reset_log_context
+from app.core.metrics import render_metrics, reset_metrics
 
 
 class _FakeResponse:
@@ -668,5 +675,287 @@ def test_llm_client_falls_back_without_call_when_daily_budget_is_exhausted(
 
     assert payload["short_summary"]
     assert payload["why_it_matters"]
+
+    get_settings.cache_clear()
+
+
+def test_llm_client_persists_trace_artifacts_and_metrics(
+    client: TestClient,
+    monkeypatch,
+    caplog,
+) -> None:
+    del client
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
+    get_settings.cache_clear()
+    reset_metrics()
+    caplog.set_level(logging.INFO)
+
+    def _fake_post(url, *, headers, json, timeout):
+        del url, headers, json, timeout
+        return _FakeEditorialNoteResponse()
+
+    monkeypatch.setattr("httpx.post", _fake_post)
+    module = importlib.import_module("app.integrations.llm")
+
+    payload = module.LLMClient().compose_editorial_note(
+        {
+            "title": "Research Brief",
+            "brief_date": "2026-04-08",
+            "summary_depth": "balanced",
+            "editorial_shortlist": [],
+            "headlines": [],
+            "interesting_side_signals": [],
+            "remaining_reads": [],
+            "audio_script": None,
+            "fallback_note": "Fallback note.",
+        }
+    )
+
+    trace = payload.get("_trace")
+    assert isinstance(trace, dict)
+    prompt_path = Path(str(trace["prompt_path"]))
+    trace_path = Path(str(trace["trace_path"]))
+    assert prompt_path.exists()
+    assert trace_path.exists()
+    assert "Write one short editorial note for a daily research/news brief." in prompt_path.read_text(
+        encoding="utf-8"
+    )
+    artifact = json.loads(trace_path.read_text(encoding="utf-8"))
+    assert artifact["operation"] == "compose_editorial_note"
+    assert artifact["status"] == "succeeded"
+    assert artifact["usage"]["total_tokens"] == 152
+    assert trace["cost_usd"] > 0
+
+    metrics = render_metrics()
+    assert (
+        'research_center_llm_requests_total{provider="gemini",model="gemini-2.5-flash",'
+        'operation="compose_editorial_note",status="success"} 1'
+        in metrics
+    )
+    assert (
+        'research_center_llm_tokens_total{provider="gemini",model="gemini-2.5-flash",'
+        'operation="compose_editorial_note",token_type="total"} 152'
+        in metrics
+    )
+    assert any(
+        record.getMessage() == "ai.invocation.completed"
+        and getattr(record, "trace_id", None) == trace["trace_id"]
+        for record in caplog.records
+    )
+
+    get_settings.cache_clear()
+    reset_metrics()
+
+
+def test_llm_client_logs_completion_with_bound_operation_context(
+    client: TestClient,
+    monkeypatch,
+    caplog,
+) -> None:
+    del client
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
+    get_settings.cache_clear()
+    reset_metrics()
+    caplog.set_level(logging.INFO)
+
+    def _fake_post(url, *, headers, json, timeout):
+        del url, headers, json, timeout
+        return _FakeEditorialNoteResponse()
+
+    monkeypatch.setattr("httpx.post", _fake_post)
+    module = importlib.import_module("app.integrations.llm")
+
+    token = bind_log_context(
+        operation_run_id="run-lightweight",
+        operation_kind="lightweight_enrichment",
+        doc_id="doc-123",
+    )
+    try:
+        payload = module.LLMClient().compose_editorial_note(
+            {
+                "title": "Research Brief",
+                "brief_date": "2026-04-08",
+                "summary_depth": "balanced",
+                "editorial_shortlist": [],
+                "headlines": [],
+                "interesting_side_signals": [],
+                "remaining_reads": [],
+                "audio_script": None,
+                "fallback_note": "Fallback note.",
+            }
+        )
+    finally:
+        reset_log_context(token)
+
+    trace = payload.get("_trace")
+    assert isinstance(trace, dict)
+    completed = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "ai.invocation.completed"
+        and getattr(record, "trace_id", None) == trace["trace_id"]
+    ]
+    assert completed
+    assert completed[-1].operation_run_id == "run-lightweight"
+    assert completed[-1].operation_kind == "lightweight_enrichment"
+    assert completed[-1].doc_id == "doc-123"
+
+    get_settings.cache_clear()
+    reset_metrics()
+
+
+def test_llm_client_records_failed_invocation_trace_and_metrics(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    del client
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
+    get_settings.cache_clear()
+    reset_metrics()
+
+    def _timeout(*args, **kwargs):
+        del args, kwargs
+        raise httpx.ReadTimeout("network timeout")
+
+    monkeypatch.setattr("httpx.post", _timeout)
+    module = importlib.import_module("app.integrations.llm")
+
+    with pytest.raises(httpx.ReadTimeout) as exc_info:
+        module.LLMClient().batch_enrich_items(
+            [
+                {
+                    "item_id": "item-1",
+                    "title": "Verifier routing",
+                    "source_name": "arXiv",
+                    "content_type": "paper",
+                    "authors": [],
+                    "organization_name": None,
+                    "short_summary": None,
+                    "why_it_matters": None,
+                    "whats_new": None,
+                    "analysis_text": "Verifier routing with benchmark results.",
+                }
+            ],
+            {
+                "favorite_topics": ["agents"],
+                "favorite_authors": [],
+                "favorite_sources": [],
+                "ignored_topics": [],
+            },
+        )
+
+    trace = getattr(exc_info.value, "ai_trace", None)
+    assert isinstance(trace, dict)
+    trace_path = Path(str(trace["trace_path"]))
+    assert trace_path.exists()
+    artifact = json.loads(trace_path.read_text(encoding="utf-8"))
+    assert artifact["operation"] == "batch_enrich_items"
+    assert artifact["status"] == "failed"
+    assert "network timeout" in artifact["error"]
+
+    metrics = render_metrics()
+    assert (
+        'research_center_llm_requests_total{provider="gemini",model="gemini-2.5-flash",'
+        'operation="batch_enrich_items",status="error"} 1'
+        in metrics
+    )
+    assert (
+        'research_center_llm_failures_total{provider="gemini",model="gemini-2.5-flash",'
+        'operation="batch_enrich_items",reason="ReadTimeout"} 1'
+        in metrics
+    )
+
+    get_settings.cache_clear()
+    reset_metrics()
+
+
+def test_llm_client_uses_schema_constrained_ollama_output_for_lightweight_scoring(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    del client
+    get_settings.cache_clear()
+
+    captured: dict[str, object] = {}
+
+    class _FakeOllamaResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "response": json.dumps(
+                    {
+                        "relevance_score": 0.81,
+                        "source_fit_score": 0.74,
+                        "topic_fit_score": 0.88,
+                        "author_fit_score": 0.42,
+                        "evidence_fit_score": 0.79,
+                        "confidence_score": 0.72,
+                        "bucket_hint": "must_read",
+                        "reason": "Strong workflow fit with concrete evidence.",
+                        "evidence_quotes": ["verifier routing", "research triage"],
+                    }
+                ),
+                "prompt_eval_count": 112,
+                "eval_count": 28,
+            }
+
+    def _fake_post(url, *, json, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return _FakeOllamaResponse()
+
+    monkeypatch.setattr("httpx.post", _fake_post)
+    module = importlib.import_module("app.integrations.llm")
+    monkeypatch.setattr(
+        module.LLMClient,
+        "ollama_status",
+        lambda self: {
+            "available": True,
+            "model": self.settings.ollama_model,
+            "detail": None,
+        },
+    )
+
+    payload = module.LLMClient().judge_lightweight_document(
+        {
+            "title": "Verifier routing for faster triage",
+            "source_name": "Example Research",
+            "source_id": "example-research",
+            "content_type": "article",
+            "authors": ["Casey Researcher"],
+            "tags": ["verifier routing"],
+            "short_summary": "A workflow note about verifier routing and triage speed.",
+        },
+        "Verifier routing can make research triage faster when you have strong evidence checks.",
+        profile={
+            "favorite_topics": ["verifier routing"],
+            "favorite_authors": ["Casey Researcher"],
+            "favorite_sources": ["Example Research"],
+            "ignored_topics": ["consumer gadget news"],
+            "prompt_guidance": {"enrichment": "Prefer workflow leverage."},
+        },
+        source_context={
+            "source_id": "example-research",
+            "name": "Example Research",
+            "type": "website",
+            "description": "Applied research notes.",
+            "tags": ["workflow"],
+        },
+    )
+
+    request_payload = captured["json"]
+    assert isinstance(request_payload, dict)
+    assert request_payload["format"] == module.LIGHTWEIGHT_SCORING_SCHEMA
+    assert "<json_schema>" in str(request_payload["prompt"])
+    assert '"relevance_score"' in str(request_payload["prompt"])
+    assert payload["relevance_score"] == 0.81
+    assert payload["topic_fit_score"] == 0.88
+    assert payload["bucket_hint"] == "must_read"
 
     get_settings.cache_clear()

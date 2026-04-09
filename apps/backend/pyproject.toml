@@ -5,12 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "research-center-backend"
 version = "0.1.0"
-description = "Backend and worker for the Research Center MVP."
+description = "Backend for the Research Center MVP."
 requires-python = ">=3.12"
 dependencies = [
   "alembic>=1.14.1",
   "beautifulsoup4>=4.12.3",
-  "celery[redis]>=5.4.0",
   "cryptography>=44.0.1",
   "email-validator>=2.2.0",
   "fastapi>=0.115.12",
@@ -21,6 +20,7 @@ dependencies = [
   "pgvector>=0.3.6",
   "psycopg[binary]>=3.2.6",
   "pydantic-settings>=2.8.1",
+  "qrcode>=8.2",
   "python-dateutil>=2.9.0.post0",
   "python-multipart>=0.0.20",
   "sentry-sdk[fastapi]>=2.25.1",

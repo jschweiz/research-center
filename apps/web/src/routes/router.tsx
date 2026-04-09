@@ -16,7 +16,10 @@ const ProfilePage = lazy(async () => ({
   default: (await import("../features/profile/ProfilePage")).ProfilePage,
 }));
 const ConnectionsPage = lazy(async () => ({
-  default: (await import("../features/settings/ConnectionsPage")).ConnectionsPage,
+  default: (await import("../features/settings/ConnectionsWorkspacePage")).ConnectionsPage,
+}));
+const PipelinePage = lazy(async () => ({
+  default: (await import("../features/settings/ConnectionsWorkspacePage")).PipelinePage,
 }));
 
 function withRouteSuspense(element: ReactNode) {
@@ -32,6 +35,7 @@ export const router = createBrowserRouter([
       { path: "inbox", element: withRouteSuspense(<InboxPage />) },
       { path: "items/:itemId", element: withRouteSuspense(<ItemDetailPage />) },
       { path: "connections", element: withRouteSuspense(<ConnectionsPage />) },
+      { path: "pipeline", element: withRouteSuspense(<PipelinePage />) },
       { path: "profile", element: withRouteSuspense(<ProfilePage />) },
     ],
   },

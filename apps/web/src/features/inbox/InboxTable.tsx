@@ -5,6 +5,7 @@ import { QuickActions } from "../../components/QuickActions";
 
 const contentTypeLabel: Record<ItemListEntry["content_type"], string> = {
   article: "Article",
+  news: "News",
   newsletter: "Newsletter",
   paper: "Paper",
   post: "Post",
@@ -67,7 +68,6 @@ export function InboxTable({ items }: { items: ItemListEntry[] }) {
                   ) : null}
                   <div className="mt-2.5 flex flex-wrap items-center gap-2.5 font-mono text-[11px] uppercase tracking-[0.16em] text-[var(--muted)]">
                     {authorLabel ? <span>{authorLabel}</span> : null}
-                    {item.also_mentioned_in_count ? <span>{item.also_mentioned_in_count} also mentioned</span> : null}
                   </div>
                 </td>
                 <td className="px-4 py-4 text-[15px] leading-6 text-[var(--muted-strong)]">{item.source_name}</td>
@@ -80,7 +80,7 @@ export function InboxTable({ items }: { items: ItemListEntry[] }) {
                   {formatInboxDate(item.published_at)}
                 </td>
                 <td className="w-[240px] px-4 py-3">
-                  <QuickActions compact inlineNotice={false} itemId={item.id} showDeeper={false} starred={item.starred} url={item.canonical_url} />
+                  <QuickActions compact itemId={item.id} starred={item.starred} triageStatus={item.triage_status} url={item.canonical_url} />
                 </td>
               </tr>
               );

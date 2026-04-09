@@ -1,11 +1,19 @@
 export type ScoreBucket = "must_read" | "worth_a_skim" | "archive";
 export type TriageStatus = "unread" | "needs_review" | "saved" | "archived";
-export type ContentType = "article" | "paper" | "newsletter" | "post" | "thread" | "signal";
-export type SourceType = "rss" | "gmail_newsletter" | "arxiv" | "manual_url";
+export type ContentType = "article" | "paper" | "newsletter" | "post" | "thread" | "signal" | "news";
+export type SourceType = "website" | "gmail_newsletter";
+export type SourceRawKind = "blog-post" | "newsletter" | "paper" | "article" | "news" | "thread" | "signal";
+export type SourceClassificationMode = "fixed" | "written_content_auto";
+export type SourceDecompositionMode = "none" | "newsletter_entries";
+export type AdvancedOutputKind = "answer" | "slides" | "chart";
+export type HealthCheckScope = "vault" | "wiki" | "raw";
 export type DataMode = "seed" | "live";
-export type RunStatus = "pending" | "running" | "succeeded" | "failed";
+export type RunStatus = "pending" | "running" | "succeeded" | "failed" | "interrupted";
 export type IngestionRunType = "ingest" | "digest" | "zotero_sync" | "cleanup" | "deeper_summary";
 export type BriefPeriodType = "day" | "week";
+export type AlphaXivSort = "Hot" | "Comments" | "Views" | "Likes" | "GitHub" | "Twitter (X)" | "Recommended";
+export type AlphaXivInterval = "3 Days" | "7 Days" | "30 Days" | "90 Days" | "All time";
+export type AlphaXivSource = "GitHub" | "Twitter (X)";
 
 export interface MeResponse {
   email: string;
@@ -14,6 +22,8 @@ export interface MeResponse {
 
 export interface ItemListEntry {
   id: string;
+  kind?: string | null;
+  source_id?: string | null;
   title: string;
   source_name: string;
   organization_name: string | null;
@@ -29,6 +39,21 @@ export interface ItemListEntry {
   total_score: number;
   reason_trace: Record<string, unknown>;
   also_mentioned_in_count: number;
+}
+
+export interface AlphaXivSimilarPaper {
+  title: string;
+  canonical_url: string;
+  app_item_id: string | null;
+  authors: string[];
+  short_summary: string | null;
+}
+
+export interface AlphaXivPaper {
+  short_summary: string | null;
+  filed_text: string | null;
+  audio_url: string | null;
+  similar_papers: AlphaXivSimilarPaper[];
 }
 
 export interface ItemDetail extends ItemListEntry {
@@ -68,6 +93,13 @@ export interface ItemDetail extends ItemListEntry {
     canonical_url: string;
   }>;
   zotero_matches: Array<Record<string, unknown>>;
+  doc_role: string;
+  parent_id: string | null;
+  asset_paths: string[];
+  raw_doc_path: string | null;
+  lightweight_enrichment_status: string;
+  lightweight_enriched_at: string | null;
+  alphaxiv: AlphaXivPaper | null;
 }
 
 export interface DigestEntry {
@@ -151,17 +183,30 @@ export interface Source {
   id: string;
   type: SourceType;
   name: string;
+  raw_kind: SourceRawKind | string;
+  classification_mode: SourceClassificationMode;
+  decomposition_mode: SourceDecompositionMode;
   url: string | null;
   query: string | null;
   description: string | null;
   active: boolean;
-  priority: number;
+  max_items: number;
   tags: string[];
   config_json: Record<string, unknown>;
   last_synced_at: string | null;
   created_at: string;
   updated_at: string;
-  rules: Array<{ id: string; rule_type: string; value: string; active: boolean }>;
+  has_custom_pipeline: boolean;
+  custom_pipeline_id: string | null;
+  latest_extraction_run: {
+    id: string;
+    status: RunStatus;
+    operation_kind: string;
+    summary: string;
+    started_at: string;
+    finished_at: string | null;
+    emitted_kinds: string[];
+  } | null;
 }
 
 export interface SourceProbeResult {
@@ -172,6 +217,10 @@ export interface SourceProbeResult {
   sample_titles: string[];
   detail: string;
   checked_at: string;
+}
+
+export interface SourceLatestLogResult {
+  run: IngestionRunHistoryEntry;
 }
 
 export interface Connection {
@@ -200,6 +249,19 @@ export interface JobResponse {
   task_name: string;
   detail: string;
   operation_run_id: string | null;
+}
+
+export interface ItemsIndexStatus {
+  up_to_date: boolean;
+  stale_document_count: number;
+  indexed_item_count: number;
+  generated_at: string | null;
+}
+
+export interface PipelineStatus {
+  raw_document_count: number;
+  lightweight_pending_count: number;
+  items_index: ItemsIndexStatus;
 }
 
 export interface IngestionRunItem {
@@ -238,6 +300,22 @@ export interface OperationLog {
   message: string;
 }
 
+export interface OperationStep {
+  step_kind: string;
+  status: RunStatus;
+  started_at: string;
+  finished_at: string | null;
+  source_id: string | null;
+  doc_id: string | null;
+  created_count: number;
+  updated_count: number;
+  skipped_count: number;
+  counts_by_kind: Record<string, number>;
+  basic_info: OperationBasicInfo[];
+  logs: OperationLog[];
+  errors: string[];
+}
+
 export interface IngestionRunHistoryEntry {
   id: string;
   run_type: IngestionRunType;
@@ -265,8 +343,31 @@ export interface IngestionRunHistoryEntry {
   average_extraction_confidence: number | null;
   basic_info: OperationBasicInfo[];
   logs: OperationLog[];
+  steps: OperationStep[];
   source_stats: IngestionRunSourceStats[];
   errors: string[];
+  codex_command?: string[] | null;
+  prompt_path?: string | null;
+  manifest_path?: string | null;
+  output_paths: string[];
+  changed_file_count: number;
+  duration_seconds?: number | null;
+  exit_code?: number | null;
+  stderr_excerpt?: string | null;
+  final_summary?: {
+    job_type: "compile" | "health_check" | "answer" | "file_output";
+    summary: string;
+    touched_files: string[];
+    created_wiki_pages: string[];
+    updated_wiki_pages: string[];
+    output_paths: string[];
+    unresolved_questions: string[];
+    suggested_follow_up_jobs: Array<{
+      job_type: "compile" | "health_check" | "answer" | "file_output";
+      reason: string;
+      target_path: string | null;
+    }>;
+  } | null;
 }
 
 export interface Profile {
@@ -280,6 +381,46 @@ export interface Profile {
   data_mode: DataMode;
   summary_depth: string;
   ranking_weights: Record<string, number>;
+  ranking_thresholds: {
+    must_read_min: number;
+    worth_a_skim_min: number;
+  };
+  brief_sections: {
+    editorial_shortlist_count: number;
+    headlines_count: number;
+    side_signals_count: number;
+    remaining_reads_count: number;
+    papers_count: number;
+    follow_up_questions_count: number;
+  };
+  audio_brief_settings: {
+    target_duration_minutes: number;
+    max_items_per_section: number;
+  };
+  prompt_guidance: {
+    enrichment: string;
+    editorial_note: string;
+    audio_brief: string;
+  };
+  alphaxiv_search_settings: {
+    topics: string[];
+    organizations: string[];
+    sort: AlphaXivSort;
+    interval: AlphaXivInterval;
+    source: AlphaXivSource | null;
+  };
   created_at: string;
   updated_at: string;
+}
+
+export interface CodexRuntimeStatus {
+  available: boolean;
+  authenticated: boolean;
+  binary: string | null;
+  model: string | null;
+  profile: string | null;
+  search_enabled: boolean;
+  timeout_minutes: number | null;
+  compile_batch_size: number | null;
+  detail: string | null;
 }
