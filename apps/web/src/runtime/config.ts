@@ -1,7 +1,7 @@
 import type { RuntimeConfig } from "./types";
 
 const FALLBACK_API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000/api";
-const FALLBACK_MODE: RuntimeConfig["mode"] = "local";
+const FALLBACK_MODE: RuntimeConfig["mode"] = __PUBLISHED_ONLY__ ? "hosted" : "local";
 
 function fallbackRuntimeConfig(): RuntimeConfig {
   return {
@@ -10,12 +10,13 @@ function fallbackRuntimeConfig(): RuntimeConfig {
     pairedLocalUrl: null,
     hostedViewerUrl: null,
     cloudKit: null,
+    staticPublishedBasePath: __PUBLISHED_ONLY__ ? "." : null,
   };
 }
 
 export async function loadRuntimeConfig(): Promise<RuntimeConfig> {
   try {
-    const response = await fetch("/app-config.json", {
+    const response = await fetch("./app-config.json", {
       cache: "no-store",
     });
     if (!response.ok) {
@@ -29,6 +30,7 @@ export async function loadRuntimeConfig(): Promise<RuntimeConfig> {
       pairedLocalUrl: payload.pairedLocalUrl ?? null,
       hostedViewerUrl: payload.hostedViewerUrl ?? null,
       cloudKit: payload.cloudKit ?? null,
+      staticPublishedBasePath: payload.staticPublishedBasePath ?? (__PUBLISHED_ONLY__ ? "." : null),
     };
   } catch {
     return fallbackRuntimeConfig();

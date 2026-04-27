@@ -57,8 +57,11 @@ def test_list_sources_returns_vault_native_source_metadata(
         "openai-website",
         "anthropic-research",
         "mistral-research",
+        "the-batch-research",
+        "jack-clark-import-ai",
         "tldr-email",
         "medium-email",
+        "alphasignal-email",
     }
     assert by_id["openai-website"]["type"] == "website"
     assert by_id["openai-website"]["raw_kind"] == "blog-post"
@@ -69,11 +72,26 @@ def test_list_sources_returns_vault_native_source_metadata(
     assert by_id["openai-website"]["max_items"] == 20
     assert by_id["mistral-research"]["type"] == "website"
     assert by_id["mistral-research"]["url"] == "https://mistral.ai/news?category=research"
+    assert by_id["the-batch-research"]["type"] == "website"
+    assert by_id["the-batch-research"]["raw_kind"] == "blog-post"
+    assert by_id["the-batch-research"]["url"] == (
+        "https://www.deeplearning.ai/the-batch/tag/research/"
+    )
+    assert by_id["jack-clark-import-ai"]["type"] == "website"
+    assert by_id["jack-clark-import-ai"]["raw_kind"] == "newsletter"
+    assert by_id["jack-clark-import-ai"]["classification_mode"] == "written_content_auto"
+    assert by_id["jack-clark-import-ai"]["decomposition_mode"] == "newsletter_entries"
+    assert by_id["jack-clark-import-ai"]["url"] == "https://jack-clark.net/feed/"
     assert by_id["tldr-email"]["type"] == "gmail_newsletter"
     assert by_id["tldr-email"]["raw_kind"] == "newsletter"
     assert by_id["tldr-email"]["classification_mode"] == "written_content_auto"
     assert by_id["tldr-email"]["decomposition_mode"] == "newsletter_entries"
     assert "tldrnewsletter.com" in (by_id["tldr-email"]["query"] or "")
+    assert by_id["alphasignal-email"]["type"] == "gmail_newsletter"
+    assert by_id["alphasignal-email"]["raw_kind"] == "newsletter"
+    assert by_id["alphasignal-email"]["classification_mode"] == "written_content_auto"
+    assert by_id["alphasignal-email"]["decomposition_mode"] == "newsletter_entries"
+    assert by_id["alphasignal-email"]["query"] == "news@alphasignal.ai"
 
 
 def test_inject_source_and_latest_log_use_vault_source_pipeline(
@@ -226,8 +244,8 @@ def test_inject_source_accepts_per_run_max_items_override_for_website_index_sour
     assert response.status_code == 200
     payload = response.json()
     assert payload["detail"] == (
-        "Source fetch, lightweight enrichment, and index rebuild completed for "
-        "Anthropic Research with a cap of 25 documents."
+        "Source fetch completed for Anthropic Research with a cap of 25 documents. "
+        "Lightweight enrichment and index refresh remain manual."
     )
     assert payload["operation_run_id"]
 
@@ -248,6 +266,45 @@ def test_inject_source_accepts_per_run_max_items_override_for_website_index_sour
     item_payload = items.json()
     assert len(item_payload) == 25
     assert {entry["title"] for entry in item_payload} >= {"Post 01", "Post 25"}
+
+
+def test_inject_source_accepts_per_run_alphaxiv_sort_override(
+    authenticated_client: TestClient,
+    monkeypatch,
+) -> None:
+    called: dict[str, object] = {}
+
+    def _fake_run_source_pipeline(
+        self,
+        *,
+        source_id: str,
+        max_items: int | None = None,
+        alphaxiv_sort: str | None = None,
+    ) -> str:
+        called["source_id"] = source_id
+        called["max_items"] = max_items
+        called["alphaxiv_sort"] = alphaxiv_sort
+        return "alphaxiv-run-123"
+
+    monkeypatch.setattr(
+        "app.services.vault_operations.VaultOperationService.run_source_pipeline",
+        _fake_run_source_pipeline,
+    )
+
+    response = authenticated_client.post(
+        "/api/sources/alphaxiv-paper/inject",
+        json={"max_items": 12, "alphaxiv_sort": "Likes"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["operation_run_id"] == "alphaxiv-run-123"
+    assert "Likes" in payload["detail"]
+    assert called == {
+        "source_id": "alphaxiv-paper",
+        "max_items": 12,
+        "alphaxiv_sort": "Likes",
+    }
 
 
 def test_latest_source_log_returns_404_when_no_extraction_exists(

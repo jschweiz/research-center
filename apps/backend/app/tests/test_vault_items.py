@@ -50,6 +50,7 @@ def test_star_and_archive_actions_update_item_views_and_cached_digests(
     initial_entry = _find_digest_entry(initial_digest.json(), item_id)
     assert initial_entry is not None
     assert initial_entry["item"]["starred"] is False
+    assert initial_entry["item"]["read"] is False
 
     starred = authenticated_client.post(f"/api/items/{item_id}/star")
     assert starred.status_code == 200
@@ -58,21 +59,25 @@ def test_star_and_archive_actions_update_item_views_and_cached_digests(
     listing = authenticated_client.get("/api/items")
     assert listing.status_code == 200
     assert listing.json()[0]["starred"] is True
+    assert listing.json()[0]["read"] is True
 
     detail = authenticated_client.get(f"/api/items/{item_id}")
     assert detail.status_code == 200
     assert detail.json()["starred"] is True
+    assert detail.json()["read"] is True
 
     hydrated_digest = authenticated_client.get("/api/briefs/today")
     assert hydrated_digest.status_code == 200
     hydrated_entry = _find_digest_entry(hydrated_digest.json(), item_id)
     assert hydrated_entry is not None
     assert hydrated_entry["item"]["starred"] is True
+    assert hydrated_entry["item"]["read"] is True
 
     unstarred = authenticated_client.post(f"/api/items/{item_id}/star")
     assert unstarred.status_code == 200
     assert unstarred.json()["detail"] == "Removed from important items."
     assert authenticated_client.get(f"/api/items/{item_id}").json()["starred"] is False
+    assert authenticated_client.get(f"/api/items/{item_id}").json()["read"] is True
 
     archived = authenticated_client.post(f"/api/items/{item_id}/archive")
     assert archived.status_code == 200

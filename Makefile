@@ -14,7 +14,7 @@ BACKEND_TEST_FILES := \
 	app/tests/test_vault_sources.py \
 	app/tests/test_vault_source_routes.py
 
-.PHONY: backend-install backend-install-embeddings backend-test backend-lint backend-audit backend-migrate backend-export-sqlite-to-vault backend-audit-vault backend-sync-vault backend-run web-install web-run web-typecheck web-build web-audit vault-submodule-init release-check
+.PHONY: backend-install backend-install-embeddings backend-test backend-lint backend-audit backend-migrate backend-export-sqlite-to-vault backend-audit-vault backend-sync-vault backend-run web-install web-run web-typecheck web-build web-build-published web-audit vault-submodule-init release-check
 
 backend-install:
 	cd $(BACKEND_DIR) && python3 -m venv .venv && .venv/bin/python -m pip install -e ".[dev]"
@@ -63,6 +63,9 @@ web-typecheck:
 
 web-build:
 	cd apps/web && npm run build
+
+web-build-published:
+	cd apps/web && npm run build:published
 
 web-audit:
 	cd apps/web && npm audit --omit=dev

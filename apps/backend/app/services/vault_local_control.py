@@ -216,6 +216,12 @@ class VaultLocalControlService:
             latest_brief_dir=str(latest_brief_dir) if latest_brief_dir is not None else None,
             raw_document_count=len(raw_documents),
             lightweight_pending_count=self.lightweight.count_pending_documents(documents=raw_documents),
+            lightweight_metadata_pending_count=self.lightweight.count_metadata_pending_documents(
+                documents=raw_documents
+            ),
+            lightweight_scoring_pending_count=self.lightweight.count_scoring_pending_documents(
+                documents=raw_documents
+            ),
             items_index=self.ingestion.items_index_status(documents=raw_documents),
             wiki_page_count=len(list(self.store.wiki_dir.rglob("*.md"))),
             topic_count=len(insights_index.topics),

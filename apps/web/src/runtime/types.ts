@@ -16,6 +16,7 @@ export interface RuntimeConfig {
   pairedLocalUrl?: string | null;
   hostedViewerUrl?: string | null;
   cloudKit?: CloudKitRuntimeConfig | null;
+  staticPublishedBasePath?: string | null;
 }
 
 export interface PublishedItemListEntry {
@@ -212,6 +213,21 @@ export interface PublishedEditionManifest {
   items: Record<string, PublishedItemDetail>;
 }
 
+export interface PublishedArchiveEntry extends PublishedEditionSummary {
+  bundle_slug: string;
+  html_path: string;
+  manifest_path: string;
+  brief_json_path: string;
+  brief_markdown_path: string;
+  audio_path: string | null;
+}
+
+export interface PublishedArchive {
+  generated_at: string;
+  latest: PublishedArchiveEntry;
+  editions: PublishedArchiveEntry[];
+}
+
 export interface PairRedeemResponse {
   device_label: string;
   paired_local_url: string;
@@ -271,6 +287,8 @@ export interface LocalControlStatus {
   latest_brief_dir: string | null;
   raw_document_count: number;
   lightweight_pending_count: number;
+  lightweight_metadata_pending_count: number;
+  lightweight_scoring_pending_count: number;
   items_index: ItemsIndexStatus;
   wiki_page_count: number;
   topic_count: number;

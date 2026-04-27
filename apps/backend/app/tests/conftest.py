@@ -32,6 +32,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("VAULT_GIT_ENABLED", "false")
     monkeypatch.setenv("SEED_DEMO_DATA", "false")
     monkeypatch.setenv("LOCAL_SERVER_BASE_URL", "http://localhost:8000")
+    monkeypatch.setenv("PUBLISHED_WEB_DIST_DIR", str(tmp_path / "published-shell"))
     monkeypatch.setenv("GMAIL_OAUTH_CLIENT_ID", "gmail-client-id")
     monkeypatch.setenv("GMAIL_OAUTH_CLIENT_SECRET", "gmail-client-secret")
     monkeypatch.setenv("AI_DAILY_COST_LIMIT_USD", "10.0")

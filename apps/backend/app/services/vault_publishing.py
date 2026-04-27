@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import html
 import shutil
+import subprocess
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+from app.core.external_urls import resolve_external_url
 from app.db.models import IngestionRunType, RunStatus
 from app.schemas.published import (
     PublishedAvailabilityRead,
@@ -32,6 +34,8 @@ MARKDOWN_FILENAME = "brief.md"
 AUDIO_FILENAME = "audio.mp3"
 BRIEF_JSON_FILENAME = "brief.json"
 ITEMS_DIRNAME = "items"
+APP_CONFIG_FILENAME = "app-config.json"
+NOJEKYLL_FILENAME = ".nojekyll"
 
 
 @dataclass(frozen=True)
@@ -160,7 +164,9 @@ class VaultPublisherService:
         latest_dir.mkdir(parents=True, exist_ok=True)
         history_dir.mkdir(parents=True, exist_ok=True)
 
-        self._write_root_index(root)
+        self._sync_published_shell(root)
+        self._write_root_app_config(root)
+        self.store.write_text(root / NOJEKYLL_FILENAME, "\n")
         self._write_edition_bundle(latest_dir, manifest=manifest, history=False)
         self._write_edition_bundle(history_dir, manifest=manifest, history=True)
         archive_path = root / "archive.json"
@@ -172,23 +178,119 @@ class VaultPublisherService:
             archive_path=archive_path,
         )
 
-    def _write_root_index(self, root: Path) -> None:
-        self.store.write_text(
-            root / INDEX_FILENAME,
-            """<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta http-equiv="refresh" content="0; url=latest/index.html" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Research Center Viewer</title>
-  </head>
-  <body>
-    <p>Opening the latest viewer snapshot… <a href="latest/index.html">Continue</a></p>
-  </body>
-</html>
-""",
+    def _sync_published_shell(self, root: Path) -> None:
+        shell_dir = self._ensure_published_shell()
+        self._clear_root_shell_artifacts(root)
+        for path in shell_dir.iterdir():
+            if path.name == "app-config.example.json":
+                continue
+            target = root / path.name
+            if path.is_dir():
+                shutil.copytree(path, target, dirs_exist_ok=True)
+                continue
+            shutil.copy2(path, target)
+
+    def _write_root_app_config(self, root: Path) -> None:
+        self.store.write_json(
+            root / APP_CONFIG_FILENAME,
+            {
+                "mode": "hosted",
+                "apiBaseUrl": "/api",
+                "pairedLocalUrl": None,
+                "hostedViewerUrl": self.store.settings.hosted_viewer_url,
+                "cloudKit": None,
+                "staticPublishedBasePath": ".",
+            },
         )
+
+    def _clear_root_shell_artifacts(self, root: Path) -> None:
+        removable_dirs = [
+            root / "assets",
+        ]
+        removable_files = [
+            root / INDEX_FILENAME,
+            root / APP_CONFIG_FILENAME,
+            root / "app-config.example.json",
+            root / NOJEKYLL_FILENAME,
+            root / "manifest.webmanifest",
+            root / "registerSW.js",
+            root / "sw.js",
+            root / "icon.svg",
+            root / "icon-192.png",
+            root / "icon-512.png",
+            root / "apple-touch-icon.png",
+        ]
+
+        for directory in removable_dirs:
+            if directory.exists():
+                shutil.rmtree(directory)
+
+        for file_path in removable_files:
+            file_path.unlink(missing_ok=True)
+
+        for workbox_path in root.glob("workbox-*.js"):
+            workbox_path.unlink(missing_ok=True)
+
+    def _ensure_published_shell(self) -> Path:
+        shell_dir = self.store.settings.published_web_dist_dir
+        if self._published_shell_is_stale(shell_dir):
+            self._build_published_shell(shell_dir)
+        index_path = shell_dir / INDEX_FILENAME
+        if not index_path.exists():
+            raise RuntimeError(f"Published viewer shell is missing {index_path}.")
+        return shell_dir
+
+    def _published_shell_is_stale(self, shell_dir: Path) -> bool:
+        index_path = shell_dir / INDEX_FILENAME
+        if not index_path.exists():
+            return True
+
+        build_time = index_path.stat().st_mtime
+        web_root = self.store.settings.web_dist_dir.parent
+        source_paths = [
+            web_root / "src",
+            web_root / "public",
+            web_root / "index.html",
+            web_root / "package.json",
+            web_root / "package-lock.json",
+            web_root / "vite.config.ts",
+            web_root / "src" / "vite-env.d.ts",
+        ]
+        return max(self._latest_mtime(path) for path in source_paths if path.exists()) > build_time
+
+    @staticmethod
+    def _latest_mtime(path: Path) -> float:
+        if path.is_file():
+            return path.stat().st_mtime
+        if not path.exists():
+            return 0.0
+        latest = path.stat().st_mtime
+        for child in path.rglob("*"):
+            if child.is_file():
+                latest = max(latest, child.stat().st_mtime)
+        return latest
+
+    def _build_published_shell(self, shell_dir: Path) -> None:
+        npm_binary = shutil.which("npm")
+        if not npm_binary:
+            raise RuntimeError("npm is required to build the published viewer shell.")
+
+        web_root = self.store.settings.web_dist_dir.parent
+        result = subprocess.run(
+            [npm_binary, "run", "build:published"],
+            capture_output=True,
+            check=False,
+            cwd=web_root,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "Published viewer shell build failed.\n"
+                f"stdout:\n{result.stdout.strip()}\n"
+                f"stderr:\n{result.stderr.strip()}"
+            )
+        if not (shell_dir / INDEX_FILENAME).exists():
+            raise RuntimeError(f"Published viewer shell build completed without {shell_dir / INDEX_FILENAME}.")
 
     def _write_edition_bundle(
         self,
@@ -354,7 +456,7 @@ class VaultPublisherService:
                 continue
             lines.extend(["", f"## {title}", ""])
             for entry in entries:
-                lines.append(f"- [{entry.item.title}]({entry.item.canonical_url})")
+                lines.append(f"- [{entry.item.title}]({resolve_external_url(entry.item.canonical_url)})")
                 if entry.note:
                     lines.append(f"  - {entry.note}")
         return "\n".join(lines).strip() + "\n"
@@ -421,7 +523,7 @@ class VaultPublisherService:
         if not entries:
             return ""
         items = "".join(
-            f"<li><a href='{html.escape(entry.item.canonical_url)}'>{html.escape(entry.item.title)}</a>"
+            f"<li><a href='{html.escape(resolve_external_url(entry.item.canonical_url) or '')}'>{html.escape(entry.item.title)}</a>"
             f"{f'<p>{html.escape(entry.note)}</p>' if entry.note else ''}</li>"
             for entry in entries
         )
@@ -436,7 +538,7 @@ class VaultPublisherService:
             "",
             f"Source: {item.source_name}",
             f"Published: {item.published_at.isoformat() if item.published_at else 'Unknown'}",
-            f"Canonical URL: {item.canonical_url}",
+            f"Canonical URL: {resolve_external_url(item.canonical_url)}",
         ]
         if summary:
             lines.extend(["", "## Summary", "", summary])

@@ -667,6 +667,13 @@ class VaultStarredItem(Base):
     starred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+class VaultReadItem(Base):
+    __tablename__ = "vault_read_items"
+
+    item_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    read_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class VaultAIBudgetDay(Base):
     __tablename__ = "vault_ai_budget_days"
 

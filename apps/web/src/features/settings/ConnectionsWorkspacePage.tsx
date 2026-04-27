@@ -22,6 +22,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { api } from "../../api/client";
 import type {
+  AlphaXivSort,
   AdvancedOutputKind,
   HealthCheckScope,
   IngestionRunHistoryEntry,
@@ -36,6 +37,7 @@ import type {
 import { SkimmableText } from "../../components/SkimmableText";
 import defaultZoteroAutoTagVocabulary from "../../constants/zoteroAutoTagVocabulary.json";
 import { hasSuccessfulEditionRun } from "../../lib/edition-output-status";
+import { useDefaultedDateInput } from "../../lib/use-defaulted-date-input";
 
 const DEFAULT_ZOTERO_AUTO_TAG_VOCABULARY = defaultZoteroAutoTagVocabulary as string[];
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -257,41 +259,30 @@ function PipelineStage({
 
 function EditionTargetField({
   value,
-  options,
   disabled,
   helperText,
+  onBlur,
   onChange,
 }: {
   value: string;
-  options: Array<{ brief_date: string; coverage_start: string; coverage_end: string }>;
   disabled: boolean;
   helperText: string;
+  onBlur: () => void;
   onChange: (value: string) => void;
 }) {
-  const resolvedValue = value || options[0]?.brief_date || "";
-
   return (
     <label className="block">
-      <span className="field-label">Edition target</span>
-      <select
+      <span className="field-label">Edition date</span>
+      <input
+        aria-label="Edition date"
         className="field-input mt-2"
         disabled={disabled}
+        onBlur={onBlur}
         onChange={(event) => onChange(event.target.value)}
-        value={resolvedValue}
-      >
-        {options.length ? (
-          options.map((option) => (
-            <option key={option.brief_date} value={option.brief_date}>
-              {formatEditionTargetLabel(option.brief_date)}
-            </option>
-          ))
-        ) : (
-          <option value="">No editions available yet</option>
-        )}
-      </select>
-      <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
-        {options.length ? helperText : "No edition targets are available yet. Run the earlier pipeline steps first."}
-      </p>
+        type="date"
+        value={value}
+      />
+      <p className="mt-2 text-xs leading-5 text-[var(--muted)]">{helperText}</p>
     </label>
   );
 }
@@ -722,11 +713,6 @@ function formatBriefDayLabel(value: string) {
   }).format(new Date(`${value}T12:00:00`));
 }
 
-function formatEditionTargetLabel(value: string) {
-  const [year, month, day] = value.split("-");
-  return `${Number(day)}/${month}/${year}`;
-}
-
 function parseIsoDate(value: string) {
   const [year, month, day] = value.split("-").map(Number);
   return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
@@ -852,17 +838,34 @@ function sortRunsByStartedAtDesc(runs: IngestionRunHistoryEntry[]) {
   return [...runs].sort((left, right) => new Date(right.started_at).getTime() - new Date(left.started_at).getTime());
 }
 
+function isAlphaXivSourcePipeline(source: Source) {
+  return source.custom_pipeline_id === "alphaxiv-paper";
+}
+
+function describeSourceInjectSummary(
+  source: Source,
+  maxItems: number,
+  alphaxivSort?: AlphaXivSort,
+) {
+  const sortSuffix =
+    isAlphaXivSourcePipeline(source) && alphaxivSort
+      ? ` using alphaXiv ${alphaxivSort} sort`
+      : "";
+  return `Running source inject for ${source.name} with a cap of ${maxItems} document${maxItems === 1 ? "" : "s"}${sortSuffix}.`;
+}
+
 function buildOptimisticSourceLatestRun(
   source: Source,
   id: string,
   startedAt: string,
   maxItems: number,
+  alphaxivSort?: AlphaXivSort,
 ): NonNullable<Source["latest_extraction_run"]> {
   return {
     id,
     status: "running",
     operation_kind: "raw_fetch",
-    summary: `Running source inject for ${source.name} with a cap of ${maxItems} documents.`,
+    summary: describeSourceInjectSummary(source, maxItems, alphaxivSort),
     started_at: startedAt,
     finished_at: null,
     emitted_kinds:
@@ -877,6 +880,7 @@ function buildOptimisticSourceInjectRun(
   id: string,
   startedAt: string,
   maxItems: number,
+  alphaxivSort?: AlphaXivSort,
 ): IngestionRunHistoryEntry {
   return {
     id,
@@ -885,7 +889,7 @@ function buildOptimisticSourceInjectRun(
     operation_kind: "raw_fetch",
     trigger: "manual_source_fetch",
     title: `Source inject · ${source.name}`,
-    summary: `Running source inject for ${source.name} with a cap of ${maxItems} documents.`,
+    summary: describeSourceInjectSummary(source, maxItems, alphaxivSort),
     started_at: startedAt,
     finished_at: null,
     affected_edition_days: [],
@@ -906,13 +910,16 @@ function buildOptimisticSourceInjectRun(
     basic_info: [
       { label: "Source", value: source.name },
       { label: "Max items", value: String(maxItems) },
+      ...(isAlphaXivSourcePipeline(source) && alphaxivSort
+        ? [{ label: "AlphaXiv sort", value: alphaxivSort }]
+        : []),
       { label: "Status", value: "Waiting for the latest extraction log" },
     ],
     logs: [
       {
         logged_at: startedAt,
         level: "info",
-        message: `Source inject requested for ${source.name} with a cap of ${maxItems} documents. Waiting for the worker to finish.`,
+        message: `${describeSourceInjectSummary(source, maxItems, alphaxivSort)} Waiting for the worker to finish.`,
       },
     ],
     steps: [],
@@ -992,11 +999,11 @@ function ConnectionsWorkspacePage({ mode }: { mode: WorkspaceMode }) {
   const [sourceProbeReports, setSourceProbeReports] = useState<Record<string, SourceProbeReport>>({});
   const [probingSourceIds, setProbingSourceIds] = useState<Record<string, boolean>>({});
   const [sourceInjectOverrides, setSourceInjectOverrides] = useState<Record<string, string>>({});
+  const [sourceInjectAlphaXivLikes, setSourceInjectAlphaXivLikes] = useState<Record<string, boolean>>({});
   const [removingSourceId, setRemovingSourceId] = useState<string | null>(null);
   const [togglingSourceId, setTogglingSourceId] = useState<string | null>(null);
   const [injectingSourceId, setInjectingSourceId] = useState<string | null>(null);
   const [openingSourceLogId, setOpeningSourceLogId] = useState<string | null>(null);
-  const [regenerateBriefDate, setRegenerateBriefDate] = useState("");
   const [advancedCompileLimit, setAdvancedCompileLimit] = useState("8");
   const [healthCheckScope, setHealthCheckScope] = useState<HealthCheckScope>("vault");
   const [healthCheckTopic, setHealthCheckTopic] = useState("");
@@ -1226,21 +1233,13 @@ function ConnectionsWorkspacePage({ mode }: { mode: WorkspaceMode }) {
 
   const runningOperationCount = ingestionRunsQuery.data?.filter((run) => run.status === "running").length ?? 0;
 
-  const regenerateOptions = useMemo(() => {
-    if (briefAvailabilityQuery.data?.days.length) return briefAvailabilityQuery.data.days;
-    if (briefAvailabilityQuery.data?.default_day) {
-      return [
-        {
-          brief_date: briefAvailabilityQuery.data.default_day,
-          coverage_start: briefAvailabilityQuery.data.default_day,
-          coverage_end: briefAvailabilityQuery.data.default_day,
-        },
-      ];
-    }
-    return [];
-  }, [briefAvailabilityQuery.data]);
-  const activeEditionTarget = regenerateBriefDate || regenerateOptions[0]?.brief_date || "";
-  const currentEditionTarget = briefAvailabilityQuery.data?.default_day ?? regenerateOptions[0]?.brief_date ?? null;
+  const defaultEditionTarget =
+    briefAvailabilityQuery.data?.default_day
+    ?? briefAvailabilityQuery.data?.days.at(-1)?.brief_date
+    ?? "";
+  const editionTargetInput = useDefaultedDateInput(defaultEditionTarget);
+  const activeEditionTarget = editionTargetInput.value;
+  const currentEditionTarget = defaultEditionTarget || null;
   const currentEditionSelected = Boolean(currentEditionTarget && activeEditionTarget === currentEditionTarget);
   const currentEditionOutputState = useMemo(
     () => ({
@@ -1434,12 +1433,6 @@ function ConnectionsWorkspacePage({ mode }: { mode: WorkspaceMode }) {
     }
     setZoteroAutoTagVocabularyHydrated(true);
   }, [zoteroAutoTagVocabularyHydrated, zoteroQuery.data, zoteroQuery.isPending]);
-
-  useEffect(() => {
-    if (!regenerateOptions.length) return;
-    if (regenerateOptions.some((option) => option.brief_date === regenerateBriefDate)) return;
-    setRegenerateBriefDate(regenerateOptions[0].brief_date);
-  }, [regenerateBriefDate, regenerateOptions]);
 
   useEffect(() => {
     if (connectionPanelsReady || gmailQuery.isPending || zoteroQuery.isPending) return;
@@ -1693,6 +1686,7 @@ function ConnectionsWorkspacePage({ mode }: { mode: WorkspaceMode }) {
   };
 
   const sourceInjectMaxItemsValue = (source: Source) => sourceInjectOverrides[source.id] ?? String(source.max_items);
+  const sourceInjectUsesAlphaXivLikes = (source: Source) => Boolean(sourceInjectAlphaXivLikes[source.id]);
 
   const handleSourceInjectMaxItemsChange = (sourceId: string, value: string) => {
     setSourceInjectOverrides((current) => {
@@ -1707,6 +1701,20 @@ function ConnectionsWorkspacePage({ mode }: { mode: WorkspaceMode }) {
     });
   };
 
+  const handleSourceInjectAlphaXivLikesChange = (sourceId: string, checked: boolean) => {
+    setPipelineNotice(null);
+    setSourceInjectAlphaXivLikes((current) => {
+      if (!checked) {
+        if (!(sourceId in current)) return current;
+        const next = { ...current };
+        delete next[sourceId];
+        return next;
+      }
+      if (current[sourceId]) return current;
+      return { ...current, [sourceId]: true };
+    });
+  };
+
   const handleInjectSource = async (source: Source) => {
     setPipelineNotice(null);
     const requestedMaxItems = Number.parseInt(sourceInjectMaxItemsValue(source), 10);
@@ -1717,6 +1725,10 @@ function ConnectionsWorkspacePage({ mode }: { mode: WorkspaceMode }) {
       });
       return;
     }
+    const requestedAlphaXivSort: AlphaXivSort | undefined =
+      isAlphaXivSourcePipeline(source) && sourceInjectUsesAlphaXivLikes(source)
+        ? "Likes"
+        : undefined;
     setInjectingSourceId(source.id);
     await queryClient.cancelQueries({ queryKey: ["sources"] });
     await queryClient.cancelQueries({ queryKey: ["ops", "ingestion-runs"] });
@@ -1724,8 +1736,20 @@ function ConnectionsWorkspacePage({ mode }: { mode: WorkspaceMode }) {
     const previousRuns = queryClient.getQueryData<IngestionRunHistoryEntry[]>(["ops", "ingestion-runs"]);
     const optimisticRunId = `optimistic-source-inject-${source.id}-${Date.now()}`;
     const startedAt = new Date().toISOString();
-    const optimisticLatestRun = buildOptimisticSourceLatestRun(source, optimisticRunId, startedAt, requestedMaxItems);
-    const optimisticRun = buildOptimisticSourceInjectRun(source, optimisticRunId, startedAt, requestedMaxItems);
+    const optimisticLatestRun = buildOptimisticSourceLatestRun(
+      source,
+      optimisticRunId,
+      startedAt,
+      requestedMaxItems,
+      requestedAlphaXivSort,
+    );
+    const optimisticRun = buildOptimisticSourceInjectRun(
+      source,
+      optimisticRunId,
+      startedAt,
+      requestedMaxItems,
+      requestedAlphaXivSort,
+    );
 
     queryClient.setQueryData<Source[]>(["sources"], (current = []) =>
       current.map((entry) =>
@@ -1741,7 +1765,10 @@ function ConnectionsWorkspacePage({ mode }: { mode: WorkspaceMode }) {
       sortRunsByStartedAtDesc([optimisticRun, ...current.filter((run) => run.id !== optimisticRunId)]),
     );
     try {
-      const response = await api.injectSource(source.id, { max_items: requestedMaxItems });
+      const response = await api.injectSource(source.id, {
+        max_items: requestedMaxItems,
+        alphaxiv_sort: requestedAlphaXivSort,
+      });
       await handleJobSuccess(response);
     } catch (error) {
       if (previousSources) {
@@ -2544,10 +2571,10 @@ function ConnectionsWorkspacePage({ mode }: { mode: WorkspaceMode }) {
                     busyLabel="Regenerating brief..."
                     controls={
                       <EditionTargetField
-                        disabled={!regenerateOptions.length}
-                        helperText="Choose which written edition to rebuild from the current index."
-                        onChange={setRegenerateBriefDate}
-                        options={regenerateOptions}
+                        disabled={pipelineActionStates.regenerate_brief.status !== "idle"}
+                        helperText="Choose any single day for the written edition to rebuild from the current index."
+                        onBlur={editionTargetInput.onBlur}
+                        onChange={editionTargetInput.onChange}
                         value={activeEditionTarget}
                       />
                     }
@@ -2570,10 +2597,10 @@ function ConnectionsWorkspacePage({ mode }: { mode: WorkspaceMode }) {
                     busyLabel="Generating audio..."
                     controls={
                       <EditionTargetField
-                        disabled={!regenerateOptions.length}
-                        helperText="Choose which edition should get a refreshed audio brief."
-                        onChange={setRegenerateBriefDate}
-                        options={regenerateOptions}
+                        disabled={pipelineActionStates.generate_audio.status !== "idle"}
+                        helperText="Choose any single day that should get a refreshed audio brief."
+                        onBlur={editionTargetInput.onBlur}
+                        onChange={editionTargetInput.onChange}
                         value={activeEditionTarget}
                       />
                     }
@@ -2596,10 +2623,10 @@ function ConnectionsWorkspacePage({ mode }: { mode: WorkspaceMode }) {
                     busyLabel="Publishing viewer..."
                     controls={
                       <EditionTargetField
-                        disabled={!regenerateOptions.length}
-                        helperText="Choose which edition should be rendered into the published viewer bundle."
-                        onChange={setRegenerateBriefDate}
-                        options={regenerateOptions}
+                        disabled={pipelineActionStates.publish_viewer.status !== "idle"}
+                        helperText="Choose any single day that should be rendered into the published viewer bundle."
+                        onBlur={editionTargetInput.onBlur}
+                        onChange={editionTargetInput.onChange}
                         value={activeEditionTarget}
                       />
                     }
@@ -2874,6 +2901,28 @@ function ConnectionsWorkspacePage({ mode }: { mode: WorkspaceMode }) {
                                     Default {source.max_items} from source settings. Raise this for longer backfills.
                                   </span>
                                 </label>
+                                {isAlphaXivSourcePipeline(source) ? (
+                                  <div className="w-full rounded-[1.2rem] border border-[var(--ink)]/8 bg-[rgba(255,255,255,0.62)] px-3 py-3">
+                                    <span className="field-label">alphaXiv sort override</span>
+                                    <label className="mt-2 flex items-start gap-3 text-sm leading-6 text-[var(--muted-strong)]">
+                                      <input
+                                        checked={sourceInjectUsesAlphaXivLikes(source)}
+                                        className="mt-1 h-4 w-4"
+                                        disabled={injectingSourceId === source.id}
+                                        onChange={(event) =>
+                                          handleSourceInjectAlphaXivLikesChange(source.id, event.target.checked)
+                                        }
+                                        type="checkbox"
+                                      />
+                                      <span>
+                                        Force Likes for this inject
+                                        <span className="mt-1 block text-xs leading-5 text-[var(--muted)]">
+                                          Unchecked keeps the current profile alphaXiv sort. Checked overrides this run to Likes so the inject surfaces the platform&apos;s most-liked papers.
+                                        </span>
+                                      </span>
+                                    </label>
+                                  </div>
+                                ) : null}
                                 <button
                                   className="secondary-button"
                                   disabled={injectingSourceId === source.id}

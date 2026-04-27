@@ -23,6 +23,8 @@ class ItemsIndexStatusRead(BaseModel):
 class PipelineStatusRead(BaseModel):
     raw_document_count: int = 0
     lightweight_pending_count: int = 0
+    lightweight_metadata_pending_count: int = 0
+    lightweight_scoring_pending_count: int = 0
     items_index: ItemsIndexStatusRead = Field(default_factory=ItemsIndexStatusRead)
 
 

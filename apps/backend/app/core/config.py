@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine.url import make_url
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 REPO_ROOT = BACKEND_ROOT.parent.parent
@@ -21,6 +22,22 @@ def _default_local_state_dir() -> Path:
 
 def _default_codex_add_dirs() -> list[Path]:
     return [BACKEND_ROOT]
+
+
+def _normalize_database_url(database_url: str) -> str:
+    if not database_url.startswith("sqlite"):
+        return database_url
+
+    url = make_url(database_url)
+    database = url.database
+    if not database or database == ":memory:":
+        return database_url
+
+    database_path = Path(database).expanduser()
+    if not database_path.is_absolute():
+        database_path = (REPO_ROOT / database_path).resolve()
+
+    return url.set(database=str(database_path)).render_as_string(hide_password=False)
 
 
 class Settings(BaseSettings):
@@ -112,6 +129,7 @@ class Settings(BaseSettings):
     local_control_token_max_age_days: int = Field(default=180, ge=1, le=3650)
     local_web_mode: Literal["local"] = "local"
     web_dist_dir: Path = BACKEND_ROOT.parent / "web" / "dist"
+    published_web_dist_dir: Path = BACKEND_ROOT.parent / "web" / "dist-published"
     vault_source_pipelines_enabled: bool = True
     vault_git_enabled: bool = True
     vault_git_remote_name: str = "origin"
@@ -202,12 +220,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def normalize_paths(self) -> "Settings":
+        self.database_url = _normalize_database_url(self.database_url)
         for field_name in (
             "audio_cache_dir",
             "database_backup_dir",
             "vault_root_dir",
             "local_state_dir",
             "web_dist_dir",
+            "published_web_dist_dir",
         ):
             value = getattr(self, field_name)
             normalized = value.expanduser()

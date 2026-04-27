@@ -30,8 +30,11 @@ def test_upsert_default_sources_is_idempotent_and_sets_catalog_metadata(client: 
     assert sources["Google AI Blog"].config_json["website_url"] == (
         "https://blog.google/innovation-and-ai/technology/ai/"
     )
+    assert sources["The Batch Research"].config_json["discovery_mode"] == "website_index"
+    assert sources["The Batch Research"].config_json["article_path_prefixes"] == ["/the-batch/"]
     assert sources["Mistral AI News"].url == "https://mistral.ai/news"
     assert sources["Meta AI Engineering"].url == "https://engineering.fb.com/tag/ai/feed/"
     assert sources["TLDR AI"].rules[0].rule_type == "label"
     assert sources["TLDR AI"].rules[0].value == "tldr-ai"
+    assert sources["AlphaSignal"].query == "from:news@alphasignal.ai"
     assert sources["Testing Catalog"].query == "from:testingcatalog@ghost.io"

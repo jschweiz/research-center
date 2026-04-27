@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Save Page</title>
+    <link rel="stylesheet" href="popup.css" />
+    <script src="popup.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <p class="hero-kicker">Browser Clip</p>
+        <div class="hero-row">
+          <div>
+            <h1>Save Into Research Center</h1>
+            <p class="hero-copy">
+              Browser text fills <code>source.md</code>. Local Gemma handles metadata on the backend.
+            </p>
+          </div>
+          <div class="hero-chip">local only</div>
+        </div>
+      </header>
+
+      <section class="panel page-panel">
+        <div class="panel-label">Active tab</div>
+        <h2 id="pageTitle" class="page-title">Checking current page…</h2>
+        <p id="pageMeta" class="page-meta">Waiting for tab context.</p>
+        <p id="pageUrl" class="page-url">-</p>
+      </section>
+
+      <section class="stats" aria-label="Capture preview">
+        <article class="stat-card">
+          <div class="stat-label">Mode</div>
+          <div id="modeValue" class="stat-value">-</div>
+        </article>
+        <article class="stat-card">
+          <div class="stat-label">Text</div>
+          <div id="textValue" class="stat-value">-</div>
+        </article>
+        <article class="stat-card">
+          <div class="stat-label">Authors</div>
+          <div id="authorsValue" class="stat-value">-</div>
+        </article>
+      </section>
+
+      <section id="statusPanel" class="panel status-panel" data-tone="idle">
+        <div class="panel-label">Status</div>
+        <h2 id="statusTitle" class="status-title">Preparing capture</h2>
+        <p id="statusDetail" class="status-detail">
+          The popup injects a deterministic capture pass into the active tab before saving.
+        </p>
+      </section>
+
+      <footer class="footer">
+        <p class="footer-note">
+          Targets <code>http://localhost:8000</code> first, then <code>127.0.0.1:8000</code>.
+        </p>
+        <button id="saveButton" class="save-button" type="button" disabled>
+          Save Page
+        </button>
+      </footer>
+    </main>
+  </body>
+</html>

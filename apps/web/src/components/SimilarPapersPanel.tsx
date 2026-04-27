@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { ArrowRight, SquareArrowOutUpRight } from "lucide-react";
 
+import { resolveExternalUrl } from "../lib/external-links";
 import { SkimmableText } from "./SkimmableText";
 
 type SimilarPaper = {
@@ -27,6 +28,7 @@ export function SimilarPapersPanel({
         {papers.map((paper) => {
           const appHref = paper.app_item_id ? hrefForItemId?.(paper.app_item_id) ?? null : null;
           const byline = paper.authors.join(", ").trim();
+          const canonicalUrl = resolveExternalUrl(paper.canonical_url);
           const body = (
             <>
               <div className="flex items-start justify-between gap-3">
@@ -58,7 +60,7 @@ export function SimilarPapersPanel({
             <a
               key={`${paper.title}-${paper.canonical_url}`}
               className="block rounded-2xl border border-[var(--ink)]/8 bg-[rgba(255,255,255,0.56)] px-4 py-4 transition hover:border-[var(--ink)]/16"
-              href={paper.canonical_url}
+              href={canonicalUrl}
               rel="noreferrer"
               target="_blank"
             >

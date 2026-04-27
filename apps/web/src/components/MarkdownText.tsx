@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import clsx from "clsx";
 
+import { resolveExternalUrl } from "../lib/external-links";
+
 interface MarkdownTextProps {
   children: string;
   className?: string;
@@ -215,16 +217,18 @@ function renderInlineMarkdown(text: string, keyPrefix: string): ReactNode[] {
         </code>,
       );
     } else if (token.type === "link") {
+      const resolvedLink = resolveExternalUrl(secondGroup);
       content.push(
-        <a key={key} href={secondGroup} rel="noreferrer" target="_blank">
+        <a key={key} href={resolvedLink} rel="noreferrer" target="_blank">
           {renderInlineMarkdown(firstGroup, `${key}-label`)}
         </a>,
       );
     } else if (token.type === "auto-link") {
       const link = trimAutoLink(firstGroup);
+      const resolvedLink = resolveExternalUrl(link);
       content.push(
-        <a key={key} href={link} rel="noreferrer" target="_blank">
-          {link}
+        <a key={key} href={resolvedLink} rel="noreferrer" target="_blank">
+          {resolvedLink}
         </a>,
       );
       const suffix = firstGroup.slice(link.length);

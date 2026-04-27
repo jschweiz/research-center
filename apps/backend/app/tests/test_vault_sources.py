@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlparse
 
@@ -8,20 +9,33 @@ import httpx
 import pytest
 
 from app.db.base import Base
-from app.db.models import ConnectionProvider, ConnectionStatus, ContentType, RunStatus
+from app.db.models import (
+    ConnectionProvider,
+    ConnectionStatus,
+    ContentType,
+    IngestionRunType,
+    RunStatus,
+)
 from app.db.session import get_engine, get_session_factory
 from app.integrations.extractors import ExtractedContent
 from app.integrations.gmail import NewsletterMessage
+from app.schemas.ops import IngestionRunHistoryRead
 from app.schemas.profile import AlphaXivSearchSettings
 from app.services.connections import ConnectionService
 from app.services.vault_ingestion import VaultIngestionService
+from app.services.vault_runtime import RunRecorder
 from app.services.vault_sources import (
     DEFAULT_SOURCES,
     SourceFetchCancelledError,
     VaultSourceIngestionService,
     WebsiteEntry,
 )
-from app.vault.models import RawDocumentFrontmatter, VaultSourcesConfig
+from app.vault.models import (
+    DefaultSourcesState,
+    RawDocumentFrontmatter,
+    VaultSourceDefinition,
+    VaultSourcesConfig,
+)
 from app.vault.store import VaultStore
 
 
@@ -97,8 +111,11 @@ def test_vault_source_service_bootstraps_default_sources_config(client) -> None:
             "openai-website",
             "anthropic-research",
             "mistral-research",
+            "the-batch-research",
+            "jack-clark-import-ai",
             "tldr-email",
             "medium-email",
+            "alphasignal-email",
             "alphaxiv-paper",
         ]
     )
@@ -119,6 +136,20 @@ def test_vault_source_service_bootstraps_default_sources_config(client) -> None:
     assert by_id["mistral-research"].config_json["website_url"] == (
         "https://mistral.ai/news?category=research"
     )
+    assert by_id["the-batch-research"].type == "website"
+    assert by_id["the-batch-research"].raw_kind == "blog-post"
+    assert by_id["the-batch-research"].config_json["discovery_mode"] == "website_index"
+    assert by_id["the-batch-research"].config_json["website_url"] == (
+        "https://www.deeplearning.ai/the-batch/tag/research/"
+    )
+    assert by_id["jack-clark-import-ai"].type == "website"
+    assert by_id["jack-clark-import-ai"].raw_kind == "newsletter"
+    assert by_id["jack-clark-import-ai"].classification_mode == "written_content_auto"
+    assert by_id["jack-clark-import-ai"].decomposition_mode == "newsletter_entries"
+    assert by_id["jack-clark-import-ai"].url == "https://jack-clark.net/feed/"
+    assert by_id["jack-clark-import-ai"].config_json["newsletter_parser"] == (
+        "jack_clark_import_ai"
+    )
     assert by_id["tldr-email"].type == "gmail_newsletter"
     assert by_id["tldr-email"].raw_kind == "newsletter"
     assert by_id["tldr-email"].classification_mode == "written_content_auto"
@@ -131,11 +162,133 @@ def test_vault_source_service_bootstraps_default_sources_config(client) -> None:
     assert by_id["medium-email"].type == "gmail_newsletter"
     assert by_id["medium-email"].raw_kind == "newsletter"
     assert by_id["medium-email"].config_json["senders"] == ["noreply@medium.com"]
+    assert by_id["alphasignal-email"].type == "gmail_newsletter"
+    assert by_id["alphasignal-email"].raw_kind == "newsletter"
+    assert by_id["alphasignal-email"].classification_mode == "written_content_auto"
+    assert by_id["alphasignal-email"].decomposition_mode == "newsletter_entries"
+    assert by_id["alphasignal-email"].config_json["senders"] == ["news@alphasignal.ai"]
     assert by_id["alphaxiv-paper"].type == "website"
     assert by_id["alphaxiv-paper"].raw_kind == "paper"
     assert by_id["alphaxiv-paper"].enabled is True
     assert all(source.created_at is not None for source in config.sources)
     assert all(source.updated_at is not None for source in config.sources)
+
+
+def test_vault_source_service_backfills_new_catalog_sources_without_overwriting_existing_ones(
+    client,
+) -> None:
+    store = VaultStore()
+    store.ensure_layout()
+    customized_default = VaultSourceDefinition(
+        id="openai-website",
+        type="website",
+        name="OpenAI Website",
+        enabled=True,
+        raw_kind="blog-post",
+        custom_pipeline_id="openai-website",
+        classification_mode="fixed",
+        decomposition_mode="none",
+        description="Customized openai source.",
+        tags=["openai", "custom"],
+        url="https://openai.com/news/rss.xml",
+        max_items=42,
+        created_at=datetime(2026, 4, 9, 8, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 4, 9, 8, 0, tzinfo=UTC),
+        config_json={"discovery_mode": "rss_feed"},
+    )
+    custom_source = VaultSourceDefinition(
+        id="custom-site",
+        type="website",
+        name="Custom Site",
+        enabled=True,
+        raw_kind="article",
+        custom_pipeline_id=None,
+        classification_mode="fixed",
+        decomposition_mode="none",
+        description="User-managed custom source.",
+        tags=["custom"],
+        url="https://example.com/feed.xml",
+        max_items=9,
+        created_at=datetime(2026, 4, 9, 8, 5, tzinfo=UTC),
+        updated_at=datetime(2026, 4, 9, 8, 5, tzinfo=UTC),
+        config_json={"discovery_mode": "rss_feed"},
+    )
+    store.save_sources_config(
+        VaultSourcesConfig(sources=[customized_default, custom_source])
+    )
+
+    service = VaultSourceIngestionService()
+    config = service.store.load_sources_config()
+    by_id = {source.id: source for source in config.sources}
+
+    assert by_id["openai-website"].max_items == 42
+    assert by_id["openai-website"].tags == ["openai", "custom"]
+    assert by_id["custom-site"].name == "Custom Site"
+    assert set(by_id) == {
+        "openai-website",
+        "custom-site",
+        "the-batch-research",
+        "jack-clark-import-ai",
+        "alphasignal-email",
+    }
+    assert service.store.load_default_sources_state().catalog_version == 4
+
+
+def test_vault_source_service_repairs_version_two_catalog_state_for_missing_new_defaults(
+    client,
+) -> None:
+    store = VaultStore()
+    store.ensure_layout()
+    customized_default = VaultSourceDefinition(
+        id="openai-website",
+        type="website",
+        name="OpenAI Website",
+        enabled=True,
+        raw_kind="blog-post",
+        custom_pipeline_id="openai-website",
+        classification_mode="fixed",
+        decomposition_mode="none",
+        description="Customized openai source.",
+        tags=["openai", "custom"],
+        url="https://openai.com/news/rss.xml",
+        max_items=42,
+        created_at=datetime(2026, 4, 9, 8, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 4, 9, 8, 0, tzinfo=UTC),
+        config_json={"discovery_mode": "rss_feed"},
+    )
+    custom_source = VaultSourceDefinition(
+        id="custom-site",
+        type="website",
+        name="Custom Site",
+        enabled=True,
+        raw_kind="article",
+        custom_pipeline_id=None,
+        classification_mode="fixed",
+        decomposition_mode="none",
+        description="User-managed custom source.",
+        tags=["custom"],
+        url="https://example.com/feed.xml",
+        max_items=9,
+        created_at=datetime(2026, 4, 9, 8, 5, tzinfo=UTC),
+        updated_at=datetime(2026, 4, 9, 8, 5, tzinfo=UTC),
+        config_json={"discovery_mode": "rss_feed"},
+    )
+    store.save_sources_config(
+        VaultSourcesConfig(sources=[customized_default, custom_source])
+    )
+    store.save_default_sources_state(DefaultSourcesState(catalog_version=2))
+
+    service = VaultSourceIngestionService()
+    config = service.store.load_sources_config()
+    by_id = {source.id: source for source in config.sources}
+
+    assert set(by_id) == {
+        "openai-website",
+        "custom-site",
+        "the-batch-research",
+        "alphasignal-email",
+    }
+    assert service.store.load_default_sources_state().catalog_version == 4
 
 
 def test_openai_source_sync_writes_blog_post_raw_documents(client, monkeypatch) -> None:
@@ -211,6 +364,283 @@ def test_openai_source_sync_writes_blog_post_raw_documents(client, monkeypatch) 
     assert index.items[0].content_type == ContentType.POST
 
 
+def test_source_sync_publishes_live_progress_counts_while_running(client, monkeypatch) -> None:
+    service = VaultSourceIngestionService()
+    service.settings.vault_source_pipelines_enabled = True
+    source = next(source for source in DEFAULT_SOURCES.sources if source.id == "anthropic-research")
+    service.store.save_sources_config(VaultSourcesConfig(sources=[source.model_copy(deep=True)]))
+
+    index_html = "<html><body>{links}</body></html>".format(
+        links="".join(
+            f'<a href="/research/post-{index:02d}">Anthropic Post {index:02d}</a>'
+            for index in range(1, 3)
+        )
+    )
+
+    def fake_fetch(url: str, *, timeout: float, headers=None, max_redirects: int = 5) -> httpx.Response:
+        assert timeout > 0
+        assert max_redirects >= 1
+        assert headers is None or isinstance(headers, dict)
+        assert url == "https://www.anthropic.com/research"
+        return _response(url, index_html, content_type="text/html")
+
+    def fake_extract(self, url: str) -> ExtractedContent:
+        slug = url.rstrip("/").split("/")[-1]
+        title = slug.replace("-", " ").title()
+        return ExtractedContent(
+            title=title,
+            cleaned_text=f"{title} body.",
+            outbound_links=[],
+            published_at=datetime(2026, 4, 7, 12, 0, tzinfo=UTC),
+            mime_type="text/html",
+            extraction_confidence=0.98,
+            raw_payload={"html": f"<html><body>{title}</body></html>"},
+        )
+
+    monkeypatch.setattr("app.services.vault_sources.fetch_safe_response", fake_fetch)
+    monkeypatch.setattr(
+        "app.integrations.extractors.ContentExtractor.extract_from_url",
+        fake_extract,
+    )
+
+    original_log = RunRecorder.log
+    progress_snapshots: list[tuple[int | None, int | None, int, int, str]] = []
+
+    def _recording_log(self, run, message, *, level="info"):
+        def _value(label: str) -> int | None:
+            raw_value = next((entry.value for entry in run.basic_info if entry.label == label), None)
+            if raw_value is None:
+                return None
+            return int(raw_value)
+
+        progress_snapshots.append(
+            (
+                _value("Inputs planned"),
+                _value("Inputs processed"),
+                run.created_count,
+                run.updated_count,
+                message,
+            )
+        )
+        return original_log(self, run, message, level=level)
+
+    monkeypatch.setattr(RunRecorder, "log", _recording_log)
+
+    run = service.sync_source_by_id(
+        "anthropic-research",
+        trigger="manual_source_fetch",
+        max_items=2,
+    )
+
+    document_snapshots = [
+        snapshot
+        for snapshot in progress_snapshots
+        if snapshot[4].startswith('Anthropic Research: created blog-post "')
+    ]
+
+    assert run.status == RunStatus.SUCCEEDED
+    assert [snapshot[0] for snapshot in document_snapshots] == [2, 2]
+    assert [snapshot[1] for snapshot in document_snapshots] == [1, 2]
+    assert [snapshot[2] for snapshot in document_snapshots] == [1, 2]
+    assert [snapshot[3] for snapshot in document_snapshots] == [0, 0]
+
+
+def test_source_sync_extracts_website_entries_in_parallel(client, monkeypatch) -> None:
+    service = VaultSourceIngestionService()
+    service.settings.vault_source_pipelines_enabled = True
+    source = next(source for source in DEFAULT_SOURCES.sources if source.id == "anthropic-research")
+    service.store.save_sources_config(VaultSourcesConfig(sources=[source.model_copy(deep=True)]))
+
+    entries = [
+        WebsiteEntry(
+            link=f"https://www.anthropic.com/research/post-{index:02d}",
+            title=f"Anthropic Post {index:02d}",
+            published_at=datetime(2026, 4, index, 12, 0, tzinfo=UTC),
+        )
+        for index in range(1, 4)
+    ]
+    monkeypatch.setattr(
+        service,
+        "_discover_website_entries",
+        lambda current_source, *, max_entries=20, alphaxiv_sort=None, run=None: entries[:max_entries],
+    )
+
+    state = {
+        "active": 0,
+        "max_active": 0,
+        "started": 0,
+    }
+    lock = threading.Lock()
+    all_started = threading.Event()
+
+    def fake_extract(entry: WebsiteEntry) -> ExtractedContent:
+        with lock:
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+            state["started"] += 1
+            if state["started"] == len(entries):
+                all_started.set()
+        try:
+            all_started.wait(timeout=1.0)
+            return ExtractedContent(
+                title=entry.title,
+                cleaned_text=f"{entry.title} body.",
+                outbound_links=[],
+                published_at=entry.published_at,
+                mime_type="text/html",
+                extraction_confidence=0.98,
+                raw_payload={"html": f"<html><body>{entry.title}</body></html>"},
+            )
+        finally:
+            with lock:
+                state["active"] -= 1
+
+    monkeypatch.setattr(service, "_extract_website_entry", fake_extract)
+
+    run = service.sync_source_by_id(
+        "anthropic-research",
+        trigger="manual_source_fetch",
+        max_items=3,
+    )
+
+    assert run.status == RunStatus.SUCCEEDED
+    assert state["max_active"] == 3
+
+
+def test_sync_source_by_id_allows_different_sources_to_run_concurrently(client, monkeypatch) -> None:
+    service = VaultSourceIngestionService()
+    service.settings.vault_source_pipelines_enabled = True
+    first_source = next(source for source in DEFAULT_SOURCES.sources if source.id == "openai-website")
+    second_source = next(source for source in DEFAULT_SOURCES.sources if source.id == "anthropic-research")
+    service.store.save_sources_config(
+        VaultSourcesConfig(
+            sources=[
+                first_source.model_copy(deep=True),
+                second_source.model_copy(deep=True),
+            ]
+        )
+    )
+
+    state = {
+        "active": 0,
+        "max_active": 0,
+        "started": 0,
+    }
+    lock = threading.Lock()
+    both_started = threading.Event()
+    results: dict[str, IngestionRunHistoryRead] = {}
+    errors: list[Exception] = []
+
+    def fake_sync_source_with_run(source, *, trigger: str, max_items=None, alphaxiv_sort=None):
+        del max_items, alphaxiv_sort
+        with lock:
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+            state["started"] += 1
+            if state["started"] == 2:
+                both_started.set()
+        both_started.wait(timeout=1.0)
+        try:
+            run = service.runs.start(
+                run_type=IngestionRunType.INGEST,
+                operation_kind="raw_fetch",
+                trigger=f"{trigger}:{source.id}",
+                title=f"Fetch {source.name}",
+                summary=f"Fetching raw documents for {source.name}.",
+            )
+            run.total_titles = 1
+            run.created_count = 1
+            return 1, service.runs.finish(
+                run,
+                status=RunStatus.SUCCEEDED,
+                summary=f"Fetched 1 raw document for {source.name}.",
+            )
+        finally:
+            with lock:
+                state["active"] -= 1
+
+    monkeypatch.setattr(service, "_sync_source_with_run", fake_sync_source_with_run)
+
+    def run_fetch(source_id: str) -> None:
+        try:
+            results[source_id] = service.sync_source_by_id(
+                source_id,
+                trigger="manual_source_fetch",
+            )
+        except Exception as exc:  # pragma: no cover - assertion below reports details
+            errors.append(exc)
+
+    first_thread = threading.Thread(target=run_fetch, args=("openai-website",))
+    second_thread = threading.Thread(target=run_fetch, args=("anthropic-research",))
+    first_thread.start()
+    second_thread.start()
+    first_thread.join(timeout=2.0)
+    second_thread.join(timeout=2.0)
+
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    assert not errors
+    assert set(results) == {"openai-website", "anthropic-research"}
+    assert all(run.status == RunStatus.SUCCEEDED for run in results.values())
+    assert state["max_active"] == 2
+
+
+def test_sync_source_by_id_rejects_duplicate_active_source_fetch(client, monkeypatch) -> None:
+    service = VaultSourceIngestionService()
+    service.settings.vault_source_pipelines_enabled = True
+    source = next(source for source in DEFAULT_SOURCES.sources if source.id == "openai-website")
+    service.store.save_sources_config(VaultSourcesConfig(sources=[source.model_copy(deep=True)]))
+
+    started = threading.Event()
+    release = threading.Event()
+    result_holder: dict[str, IngestionRunHistoryRead] = {}
+    error_holder: list[Exception] = []
+
+    def fake_sync_source_with_run(source, *, trigger: str, max_items=None, alphaxiv_sort=None):
+        del max_items, alphaxiv_sort
+        started.set()
+        release.wait(timeout=1.0)
+        run = service.runs.start(
+            run_type=IngestionRunType.INGEST,
+            operation_kind="raw_fetch",
+            trigger=f"{trigger}:{source.id}",
+            title=f"Fetch {source.name}",
+            summary=f"Fetching raw documents for {source.name}.",
+        )
+        run.total_titles = 1
+        run.created_count = 1
+        return 1, service.runs.finish(
+            run,
+            status=RunStatus.SUCCEEDED,
+            summary=f"Fetched 1 raw document for {source.name}.",
+        )
+
+    monkeypatch.setattr(service, "_sync_source_with_run", fake_sync_source_with_run)
+
+    def run_fetch() -> None:
+        try:
+            result_holder["run"] = service.sync_source_by_id(
+                "openai-website",
+                trigger="manual_source_fetch",
+            )
+        except Exception as exc:  # pragma: no cover - assertion below reports details
+            error_holder.append(exc)
+
+    thread = threading.Thread(target=run_fetch)
+    thread.start()
+    assert started.wait(timeout=1.0)
+
+    with pytest.raises(RuntimeError, match="Raw fetch is already active for OpenAI Website\\."):
+        service.sync_source_by_id("openai-website", trigger="manual_source_fetch")
+
+    release.set()
+    thread.join(timeout=2.0)
+
+    assert not thread.is_alive()
+    assert not error_holder
+    assert result_holder["run"].status == RunStatus.SUCCEEDED
+
+
 def test_openai_source_sync_uses_feed_summary_when_article_fetch_fails(client, monkeypatch) -> None:
     service = VaultSourceIngestionService()
     service.settings.vault_source_pipelines_enabled = True
@@ -262,6 +692,133 @@ def test_openai_source_sync_uses_feed_summary_when_article_fetch_fails(client, m
     assert documents[0].body.strip() == "A pilot program to support independent safety and alignment research."
 
 
+def test_source_sync_uses_embedded_feed_html_without_refetching_article(client, monkeypatch) -> None:
+    service = VaultSourceIngestionService()
+    service.settings.vault_source_pipelines_enabled = True
+    source = next(source for source in DEFAULT_SOURCES.sources if source.id == "openai-website")
+    service.store.save_sources_config(VaultSourcesConfig(sources=[source.model_copy(deep=True)]))
+
+    article_url = "https://openai.com/index/embedded-feed-article"
+    repeated_paragraph = " ".join(
+        [
+            "This article explains how agent systems coordinate tools, memory, and evaluation signals."
+            for _ in range(12)
+        ]
+    )
+    embedded_html = f"""
+<html>
+  <head>
+    <title>Embedded Feed Article</title>
+    <meta property="article:published_time" content="2026-04-07T12:00:00Z" />
+  </head>
+  <body>
+    <article>
+      <p>{repeated_paragraph}</p>
+      <p>{repeated_paragraph}</p>
+    </article>
+  </body>
+</html>
+""".strip()
+    feed = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>OpenAI News</title>
+    <item>
+      <title>Embedded Feed Article</title>
+      <description><![CDATA[<p>Short teaser only.</p>]]></description>
+      <link>{article_url}</link>
+      <pubDate>Tue, 07 Apr 2026 12:00:00 GMT</pubDate>
+      <content:encoded><![CDATA[{embedded_html}]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"""
+
+    def fake_fetch(url: str, *, timeout: float, headers=None, max_redirects: int = 5) -> httpx.Response:
+        assert timeout > 0
+        assert max_redirects >= 1
+        assert headers is None or isinstance(headers, dict)
+        assert url == "https://openai.com/news/rss.xml"
+        return _response(url, feed, content_type="application/rss+xml")
+
+    def unexpected_extract(self, url: str) -> ExtractedContent:
+        raise AssertionError(f"extract_from_url should not be called for {url}")
+
+    monkeypatch.setattr("app.services.vault_sources.fetch_safe_response", fake_fetch)
+    monkeypatch.setattr(
+        "app.integrations.extractors.ContentExtractor.extract_from_url",
+        unexpected_extract,
+    )
+
+    result = service.sync_enabled_sources(trigger="test_sync")
+    documents = service.store.list_raw_documents()
+
+    assert result.synced_document_count == 1
+    assert len(documents) == 1
+    assert documents[0].frontmatter.title == "Embedded Feed Article"
+    assert documents[0].frontmatter.asset_paths == ["original.html"]
+    assert "agent systems coordinate tools, memory, and evaluation signals." in documents[0].body
+
+
+def test_source_sync_can_fetch_multiple_sources_in_parallel(client, monkeypatch) -> None:
+    service = VaultSourceIngestionService()
+    service.settings.vault_source_pipelines_enabled = True
+    first_source = next(source for source in DEFAULT_SOURCES.sources if source.id == "openai-website")
+    second_source = next(source for source in DEFAULT_SOURCES.sources if source.id == "anthropic-research")
+    service.store.save_sources_config(
+        VaultSourcesConfig(
+            sources=[
+                first_source.model_copy(deep=True),
+                second_source.model_copy(deep=True),
+            ]
+        )
+    )
+
+    state = {
+        "active": 0,
+        "max_active": 0,
+        "started": 0,
+    }
+    lock = threading.Lock()
+    both_started = threading.Event()
+
+    def fake_sync_source_with_run(source, *, trigger: str, max_items=None, alphaxiv_sort=None):
+        del max_items, alphaxiv_sort
+        run = service.runs.start(
+            run_type=IngestionRunType.INGEST,
+            operation_kind="raw_fetch",
+            trigger=f"{trigger}:{source.id}",
+            title=f"Fetch {source.name}",
+            summary=f"Fetching raw documents for {source.name}.",
+        )
+        with lock:
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+            state["started"] += 1
+            if state["started"] == 2:
+                both_started.set()
+        both_started.wait(timeout=1.0)
+        run.total_titles = 1
+        run.created_count = 1
+        record = service.runs.finish(
+            run,
+            status=RunStatus.SUCCEEDED,
+            summary=f"Fetched 1 raw document for {source.name}.",
+        )
+        with lock:
+            state["active"] -= 1
+        return 1, record
+
+    monkeypatch.setattr(service, "_sync_source_with_run", fake_sync_source_with_run)
+
+    result = service.sync_enabled_sources(trigger="test_sync", parallel=True)
+
+    assert result.source_count == 2
+    assert result.synced_document_count == 2
+    assert result.failed_source_count == 0
+    assert state["max_active"] == 2
+
+
 def test_source_sync_can_be_stopped_mid_run(client, monkeypatch) -> None:
     service = VaultSourceIngestionService()
     service.settings.vault_source_pipelines_enabled = True
@@ -279,7 +836,7 @@ def test_source_sync_can_be_stopped_mid_run(client, monkeypatch) -> None:
     monkeypatch.setattr(
         service,
         "_discover_website_entries",
-        lambda current_source, *, max_entries=20, run=None: entries[:max_entries],
+        lambda current_source, *, max_entries=20, alphaxiv_sort=None, run=None: entries[:max_entries],
     )
 
     extracted_count = {"value": 0}
@@ -311,7 +868,7 @@ def test_source_sync_can_be_stopped_mid_run(client, monkeypatch) -> None:
 
     assert "canceled" in str(exc_info.value).lower()
     documents = service.store.list_raw_documents()
-    assert len(documents) == 1
+    assert len(documents) == 0
 
     run = service.latest_run_for_source("openai-website")
     assert run is not None
@@ -334,7 +891,7 @@ def test_alphaxiv_source_sync_writes_rich_paper_raw_documents(client, monkeypatc
     monkeypatch.setattr(
         service,
         "_discover_website_entries",
-        lambda current_source, *, max_entries=20, run=None: [
+        lambda current_source, *, max_entries=20, alphaxiv_sort=None, run=None: [
             WebsiteEntry(
                 link=paper_url,
                 title="Self-Distilled RLVR",
@@ -671,6 +1228,73 @@ def test_alphaxiv_source_discovery_pages_feed_and_uses_profile_filters(client, m
     assert [parse_qs(urlparse(url).query)["pageNum"][0] for url in requested_urls] == ["1", "2"]
 
 
+def test_alphaxiv_source_discovery_accepts_per_run_sort_override(monkeypatch) -> None:
+    service = VaultSourceIngestionService()
+    source = next(source for source in DEFAULT_SOURCES.sources if source.id == "alphaxiv-paper")
+
+    monkeypatch.setattr(
+        "app.services.vault_sources.load_profile_snapshot",
+        lambda: type(
+            "ProfileSnapshot",
+            (),
+            {
+                "alphaxiv_search_settings": AlphaXivSearchSettings(
+                    topics=["agents"],
+                    organizations=["OpenAI"],
+                    sort="Hot",
+                    interval="30 Days",
+                    source="GitHub",
+                )
+            },
+        )(),
+    )
+
+    def fake_alphaxiv_fetch(
+        url: str, *, timeout: float, headers=None, max_redirects: int = 5
+    ) -> httpx.Response:
+        assert timeout > 0
+        assert max_redirects >= 1
+        assert headers is None or isinstance(headers, dict)
+
+        parsed = urlparse(url)
+        assert parsed.path == "/papers/v3/feed"
+        params = parse_qs(parsed.query)
+        assert params["sort"] == ["Likes"]
+        assert params["interval"] == ["30 Days"]
+        assert params["source"] == ["GitHub"]
+        assert json.loads(params["topics"][0]) == ["agents"]
+        assert json.loads(params["organizations"][0]) == ["OpenAI"]
+
+        return _json_response(
+            url,
+            {
+                "papers": [
+                    {
+                        "universalId": "2604.00001",
+                        "title": "Most liked AlphaXiv paper",
+                        "publicationDate": int(
+                            datetime(2026, 4, 1, 12, 0, tzinfo=UTC).timestamp() * 1000
+                        ),
+                        "paper_summary": {"summary": "Popular paper summary."},
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr("app.integrations.alphaxiv.fetch_safe_response", fake_alphaxiv_fetch)
+
+    entries = service._discover_website_entries(
+        source,
+        max_entries=1,
+        alphaxiv_sort="Likes",
+    )
+
+    assert len(entries) == 1
+    assert entries[0].link == "https://www.alphaxiv.org/abs/2604.00001"
+    assert entries[0].title == "Most liked AlphaXiv paper"
+    assert entries[0].summary == "Popular paper summary."
+
+
 def test_anthropic_source_discovery_filters_research_index_links(client, monkeypatch) -> None:
     service = VaultSourceIngestionService()
     source = next(source for source in DEFAULT_SOURCES.sources if source.id == "anthropic-research")
@@ -700,6 +1324,53 @@ def test_anthropic_source_discovery_filters_research_index_links(client, monkeyp
     assert [entry.link for entry in entries] == [
         "https://www.anthropic.com/research/constitutional-classifiers",
         "https://www.anthropic.com/research/evals-at-scale",
+    ]
+
+
+def test_the_batch_source_discovery_filters_research_tag_index_links(client, monkeypatch) -> None:
+    service = VaultSourceIngestionService()
+    source = next(source for source in DEFAULT_SOURCES.sources if source.id == "the-batch-research")
+    html = """
+<html>
+  <body>
+    <a href="/the-batch/">The Batch</a>
+    <a href="/the-batch/about/">About</a>
+    <a href="/the-batch/tag/research/">Research</a>
+    <a href="/the-batch/stanford-and-together-ai-researchers-chart-edge-models-performance-in-intelligence-per-watt/">
+      <h2>Can Local AI Stand In for the Cloud?</h2>
+    </a>
+    <a href="https://www.deeplearning.ai/the-batch/test-time-training-end-to-end-ttt-e2e-retrains-model-weights-to-handle-long-inputs/">
+      Test-Time Training End-to-End
+    </a>
+    <a href="https://external.example.com/the-batch/offsite">Ignore</a>
+  </body>
+</html>
+"""
+
+    def fake_fetch(url: str, *, timeout: float, headers=None, max_redirects: int = 5) -> httpx.Response:
+        assert timeout > 0
+        assert max_redirects >= 1
+        assert headers is None or isinstance(headers, dict)
+        assert url == "https://www.deeplearning.ai/the-batch/tag/research/"
+        return _response(url, html, content_type="text/html")
+
+    monkeypatch.setattr("app.services.vault_sources.fetch_safe_response", fake_fetch)
+
+    entries = service._discover_website_entries(source)
+
+    assert [entry.link for entry in entries] == [
+        (
+            "https://www.deeplearning.ai/the-batch/"
+            "stanford-and-together-ai-researchers-chart-edge-models-performance-in-intelligence-per-watt"
+        ),
+        (
+            "https://www.deeplearning.ai/the-batch/"
+            "test-time-training-end-to-end-ttt-e2e-retrains-model-weights-to-handle-long-inputs"
+        ),
+    ]
+    assert [entry.title for entry in entries] == [
+        "Can Local AI Stand In for the Cloud?",
+        "Test-Time Training End-to-End",
     ]
 
 
@@ -873,6 +1544,129 @@ def test_mistral_source_discovery_filters_research_category_page_links(client, m
     ]
     assert entries[0].published_at == datetime(2026, 3, 23, 16, 0, tzinfo=UTC)
     assert entries[0].summary == "Voxtral TTS release for voice agents."
+
+
+def test_jack_clark_source_sync_decomposes_issue_into_story_entries(client, monkeypatch) -> None:
+    service = VaultSourceIngestionService()
+    service.settings.vault_source_pipelines_enabled = True
+    source = next(source for source in DEFAULT_SOURCES.sources if source.id == "jack-clark-import-ai")
+    service.store.save_sources_config(VaultSourcesConfig(sources=[source.model_copy(deep=True)]))
+
+    issue_url = (
+        "https://jack-clark.net/2026/04/06/"
+        "import-ai-452-scaling-laws-for-cyberwar-rising-tides-of-ai-automation-and-a-puzzle-over-gdp-forecasting/"
+    )
+    issue_fragment = """
+<div class="entry-content">
+  <p>Welcome to Import AI, a newsletter about AI research.</p>
+  <p class="button-wrapper"><a href="https://importai.substack.com/subscribe?">Subscribe now</a></p>
+  <p><strong>Uh oh, there's a scaling war for cyberattacks as well!:</strong><br /><em>...The smarter the system, the better the ability to cyberattack...</em>AI safety research organization Lyptus Research has looked at offensive cyber capabilities.</p>
+  <p><strong>Why this matters:</strong> Offensive cyber capability is diffusing quickly.<br /><strong>Read more:</strong> <a href="https://lyptusresearch.org/research/offensive-cyber-time-horizons">Offensive Cybersecurity Time Horizons</a>.</p>
+  <p>***</p>
+  <p><strong>MIT: A rising tide of automation is going to make good enough AI for most text-based tasks by 2029:</strong><br /><em>...How do you revolutionize an economy? Gradually and consistently...</em>Researchers with MIT describe broad automation progress.</p>
+  <p><strong>Read more:</strong> <a href="https://arxiv.org/abs/2604.01363">Crashing Waves vs. Rising Tides</a>.</p>
+  <p>***</p>
+  <p><strong>Tech Tales:</strong></p>
+  <p>Warfare<br /><em>[2029]</em></p>
+  <p><em>Thanks for reading!</em></p>
+</div>
+""".strip()
+    feed = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Import AI</title>
+    <item>
+      <title>Import AI 452: Scaling laws for cyberwar; rising tides of AI automation; and a puzzle over GDP forecasting</title>
+      <link>{issue_url}</link>
+      <pubDate>Mon, 06 Apr 2026 12:31:31 GMT</pubDate>
+      <description><![CDATA[<p>Weekly issue summary.</p>]]></description>
+      <content:encoded><![CDATA[{issue_fragment}]]></content:encoded>
+    </item>
+  </channel>
+</rss>
+"""
+
+    def fake_fetch(
+        url: str, *, timeout: float, headers=None, max_redirects: int = 5
+    ) -> httpx.Response:
+        assert timeout > 0
+        assert max_redirects >= 1
+        assert headers is None or isinstance(headers, dict)
+        assert url == "https://jack-clark.net/feed/"
+        return _response(url, feed, content_type="application/rss+xml")
+
+    def failing_extract(self, url: str) -> ExtractedContent:
+        raise httpx.HTTPStatusError(
+            "403 Forbidden",
+            request=httpx.Request("GET", url),
+            response=httpx.Response(403, request=httpx.Request("GET", url)),
+        )
+
+    monkeypatch.setattr("app.services.vault_sources.fetch_safe_response", fake_fetch)
+    monkeypatch.setattr(
+        "app.integrations.extractors.ContentExtractor.extract_from_url",
+        failing_extract,
+    )
+
+    result = service.sync_enabled_sources(trigger="test_sync")
+    documents = service.store.list_raw_documents()
+
+    assert result.source_count == 1
+    assert result.synced_document_count == 3
+    assert result.failed_source_count == 0
+    assert len(documents) == 3
+
+    parent = next(document for document in documents if document.frontmatter.doc_role == "primary")
+    children = sorted(
+        (document for document in documents if document.frontmatter.doc_role == "derived"),
+        key=lambda document: document.frontmatter.title,
+    )
+
+    assert parent.frontmatter.kind == "newsletter"
+    assert parent.frontmatter.source_name == "Import AI"
+    assert parent.frontmatter.source_url == issue_url.rstrip("/")
+    assert parent.frontmatter.index_visibility == "hidden"
+    assert parent.frontmatter.asset_paths == ["original.html"]
+    assert "Welcome to Import AI" not in parent.body
+    assert "Subscribe now" not in parent.body
+    assert "Tech Tales" not in parent.body
+    assert (
+        "### [Uh oh, there's a scaling war for cyberattacks as well!]"
+        "(https://lyptusresearch.org/research/offensive-cyber-time-horizons)"
+    ) in parent.body
+    assert (
+        "### [MIT: A rising tide of automation is going to make good enough AI for most "
+        "text-based tasks by 2029](https://arxiv.org/abs/2604.01363)"
+    ) in parent.body
+
+    by_title = {document.frontmatter.title: document for document in children}
+    assert set(by_title) == {
+        "MIT: A rising tide of automation is going to make good enough AI for most text-based tasks by 2029",
+        "Uh oh, there's a scaling war for cyberattacks as well!",
+    }
+    assert by_title["MIT: A rising tide of automation is going to make good enough AI for most text-based tasks by 2029"].frontmatter.kind == "paper"
+    assert by_title["MIT: A rising tide of automation is going to make good enough AI for most text-based tasks by 2029"].frontmatter.canonical_url == "https://arxiv.org/abs/2604.01363"
+    assert by_title["Uh oh, there's a scaling war for cyberattacks as well!"].frontmatter.kind == "blog-post"
+    assert (
+        by_title["Uh oh, there's a scaling war for cyberattacks as well!"].frontmatter.parent_id
+        == parent.frontmatter.id
+    )
+    assert "Source newsletter: Import AI 452:" in by_title[
+        "Uh oh, there's a scaling war for cyberattacks as well!"
+    ].body
+    assert f"Source issue: {issue_url.rstrip('/')}" in by_title[
+        "Uh oh, there's a scaling war for cyberattacks as well!"
+    ].body
+
+    _install_summary_stub(monkeypatch)
+    index = VaultIngestionService().rebuild_items_index(trigger="test_sync")
+
+    visible_items = [item for item in index.items if item.index_visibility != "hidden"]
+    hidden_items = [item for item in index.items if item.index_visibility == "hidden"]
+    assert len(visible_items) == 2
+    assert len(hidden_items) == 1
+    assert {item.kind for item in visible_items} == {"blog-post", "paper"}
+    assert hidden_items[0].kind == "newsletter"
 
 
 def test_tldr_structured_newsletter_body_keeps_only_editorial_stories(client) -> None:
@@ -1071,6 +1865,286 @@ def test_medium_structured_newsletter_body_renders_story_cards_as_markdown(clien
     assert "> Vivedha Elango in Level Up Coding · 17 min read · 747 claps · 12 responses" in entries[1].body
 
 
+def test_alphasignal_structured_newsletter_body_extracts_feature_cards_and_signals(client) -> None:
+    service = VaultSourceIngestionService()
+    source = next(source for source in DEFAULT_SOURCES.sources if source.id == "alphasignal-email")
+    html = """
+<html>
+  <body>
+    <table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%">
+      <tr><td>Summary</td></tr>
+      <tr><td>Top News</td></tr>
+      <tr><td><a href="https://app.alphasignal.ai/c?lid=summary-1">▸ Meta releases Muse Spark , a reasoning model with parallel agent inference</a></td></tr>
+      <tr><td>TELUS Digital</td></tr>
+      <tr><td><a href="https://app.alphasignal.ai/c?lid=summary-sponsor">▸ Test your LLM against prompt injection attacks using real benchmarks</a></td></tr>
+      <tr><td>Signals</td></tr>
+      <tr><td><a href="https://app.alphasignal.ai/c?lid=summary-2">▸ Cursor lets you run agents remotely and control them from phone</a></td></tr>
+    </table>
+
+    <table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%">
+      <tr>
+        <td style="font-family:system-ui, sans-serif;font-size:16px;font-weight:bold;">Top News</td>
+      </tr>
+      <tr>
+        <td><table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%"><tr><td style="border-top:1px solid #6B6B6B;"></td></tr></table></td>
+      </tr>
+      <tr>
+        <td class="h1"><span>Meta debuts Muse Spark combining multimodal inputs, tool use, and agent orchestration in one system</span></td>
+      </tr>
+      <tr>
+        <td>23,539 Likes</td>
+      </tr>
+      <tr>
+        <td><img alt="Feature image" src="feature-1.png"></td>
+      </tr>
+      <tr>
+        <td>
+          <div>
+            <p>Meta introduces Muse Spark, the first model from its rebuilt AI stack after nine months of changes across infrastructure, architecture, and data.</p>
+            <p><strong>What it does</strong></p>
+            <ul>
+              <li>Handles multimodal inputs in a single pipeline without separate models</li>
+              <li>Runs parallel agents to improve reasoning without increasing latency</li>
+            </ul>
+          </div>
+        </td>
+      </tr>
+      <tr>
+        <td align="center">
+          <table align="center" border="0" cellpadding="0" cellspacing="0" role="presentation">
+            <tr><td class="btn"><a href="https://app.alphasignal.ai/c?lid=story-1">TRY MUSE SPARK</a></td></tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+
+    <table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%">
+      <tr>
+        <td style="font-family:system-ui, sans-serif;font-size:16px;font-weight:bold;">Top Papers</td>
+      </tr>
+      <tr>
+        <td><table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%"><tr><td style="border-top:1px solid #6B6B6B;"></td></tr></table></td>
+      </tr>
+      <tr>
+        <td class="h1"><span>Open models learn to plan better with staged verifier feedback</span></td>
+      </tr>
+      <tr>
+        <td>8,104 Stars</td>
+      </tr>
+      <tr>
+        <td>
+          <div>
+            <p>The paper studies staged verifier feedback for multi-step planning systems.</p>
+            <p><strong>Key result</strong></p>
+            <ul>
+              <li>Improves final-answer accuracy without adding a larger base model</li>
+            </ul>
+          </div>
+        </td>
+      </tr>
+      <tr>
+        <td align="center">
+          <table align="center" border="0" cellpadding="0" cellspacing="0" role="presentation">
+            <tr><td class="btn"><a href="https://app.alphasignal.ai/c?lid=story-2">READ THE PAPER</a></td></tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+
+    <table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%">
+      <tr>
+        <td class="h1">Signals</td>
+      </tr>
+      <tr><td><table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%"><tr><td style="border-top:1px solid #000000;"></td></tr></table></td></tr>
+      <tr>
+        <td style="padding:15px 0;">
+          <table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%">
+            <tr>
+              <td width="30" valign="top">1</td>
+              <td valign="top">
+                <a class="h1" href="https://app.alphasignal.ai/c?lid=signal-1">Cursor enables running agents on any machine while controlling them remotely from your phone</a>
+                <span>4,301 Likes</span>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr><td><table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%"><tr><td style="border-top:1px solid #cbcbcb;"></td></tr></table></td></tr>
+      <tr>
+        <td style="padding:15px 0;">
+          <table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%">
+            <tr>
+              <td width="30" valign="top">2</td>
+              <td valign="top">
+                <a class="h1" href="https://app.alphasignal.ai/c?lid=signal-sponsor">H Company presents Computer Use Agent at HumanX reaching human level performance and topping OSW-V</a>
+                <span>Presented by H Company</span>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr><td><table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%"><tr><td style="border-top:1px solid #cbcbcb;"></td></tr></table></td></tr>
+      <tr>
+        <td style="padding:15px 0;">
+          <table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%">
+            <tr>
+              <td width="30" valign="top">3</td>
+              <td valign="top">
+                <a class="h1" href="https://app.alphasignal.ai/c?lid=signal-2">OpenAI publishes Child Safety Blueprint outlining policies to prevent AI-enabled exploitation and improve safeguards</a>
+                <span>2,419 Likes</span>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+""".strip()
+    message = NewsletterMessage(
+        message_id="gmail-alphasignal-1",
+        thread_id="gmail-alphasignal-thread-1",
+        subject="⚡️ Meta Muse Spark: 10x efficiency with parallel agent inference",
+        sender="AlphaSignal <news@alphasignal.ai>",
+        published_at=datetime(2026, 4, 9, 16, 14, 36, tzinfo=UTC),
+        text_body="A plain text fallback that should not be used when structured parsing succeeds.",
+        html_body=html,
+        outbound_links=[],
+        permalink="https://mail.google.com/mail/u/0/#inbox/gmail-alphasignal-1",
+    )
+
+    entries = service._extract_newsletter_entries(source, message)
+    body = service._render_newsletter_body(source, message, entries)
+
+    assert "Sender:" not in body
+    assert "Published At:" not in body
+    assert "## Email Body" not in body
+    assert "Summary" not in body
+    assert "Presented by H Company" not in body
+    assert "Test your LLM against prompt injection attacks" not in body
+    assert "## Top News" in body
+    assert "## Top Papers" in body
+    assert "## Signals" in body
+    assert "### [Meta debuts Muse Spark combining multimodal inputs, tool use, and agent orchestration in one system](https://app.alphasignal.ai/c?lid=story-1)" in body
+    assert "### [Open models learn to plan better with staged verifier feedback](https://app.alphasignal.ai/c?lid=story-2)" in body
+    assert "### [Cursor enables running agents on any machine while controlling them remotely from your phone](https://app.alphasignal.ai/c?lid=signal-1)" in body
+    assert "### [OpenAI publishes Child Safety Blueprint outlining policies to prevent AI-enabled exploitation and improve safeguards](https://app.alphasignal.ai/c?lid=signal-2)" in body
+    assert "> 23,539 Likes" in body
+    assert "> 8,104 Stars" in body
+    assert "> 4,301 Likes" in body
+    assert "**What it does**" in body
+    assert "- Handles multimodal inputs in a single pipeline without separate models" in body
+    assert "**Key result**" in body
+
+    assert [entry.title for entry in entries] == [
+        "Meta debuts Muse Spark combining multimodal inputs, tool use, and agent orchestration in one system",
+        "Open models learn to plan better with staged verifier feedback",
+        "Cursor enables running agents on any machine while controlling them remotely from your phone",
+        "OpenAI publishes Child Safety Blueprint outlining policies to prevent AI-enabled exploitation and improve safeguards",
+    ]
+    assert [entry.link for entry in entries] == [
+        "https://app.alphasignal.ai/c?lid=story-1",
+        "https://app.alphasignal.ai/c?lid=story-2",
+        "https://app.alphasignal.ai/c?lid=signal-1",
+        "https://app.alphasignal.ai/c?lid=signal-2",
+    ]
+    assert "Section: Top News" in entries[0].body
+    assert "> 23,539 Likes" in entries[0].body
+    assert "Section: Signals" in entries[2].body
+    assert "> 2,419 Likes" in entries[3].body
+
+
+def test_alphasignal_gmail_source_sync_writes_newsletter_raw_documents(client, monkeypatch) -> None:
+    service = VaultSourceIngestionService()
+    service.settings.vault_source_pipelines_enabled = True
+    source = next(source for source in DEFAULT_SOURCES.sources if source.id == "alphasignal-email")
+    service.store.save_sources_config(VaultSourcesConfig(sources=[source.model_copy(deep=True)]))
+
+    html = """
+<table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%">
+  <tr><td>Top News</td></tr>
+  <tr><td><table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%"><tr><td style="border-top:1px solid #6B6B6B;"></td></tr></table></td></tr>
+  <tr><td class="h1"><span>Meta debuts Muse Spark combining multimodal inputs, tool use, and agent orchestration in one system</span></td></tr>
+  <tr><td>23,539 Likes</td></tr>
+  <tr><td><div><p>Meta introduces Muse Spark, the first model from its rebuilt AI stack after nine months of changes across infrastructure, architecture, and data.</p></div></td></tr>
+  <tr><td align="center"><table align="center" border="0" cellpadding="0" cellspacing="0" role="presentation"><tr><td class="btn"><a href="https://app.alphasignal.ai/c?lid=story-1">TRY MUSE SPARK</a></td></tr></table></td></tr>
+</table>
+<table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%">
+  <tr><td class="h1">Signals</td></tr>
+  <tr><td><table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%"><tr><td style="border-top:1px solid #000000;"></td></tr></table></td></tr>
+  <tr><td style="padding:15px 0;"><table border="0" cellpadding="0" cellspacing="0" role="presentation" width="100%"><tr><td width="30" valign="top">1</td><td valign="top"><a class="h1" href="https://app.alphasignal.ai/c?lid=signal-1">Cursor enables running agents on any machine while controlling them remotely from your phone</a><span>4,301 Likes</span></td></tr></table></td></tr>
+</table>
+""".strip()
+
+    captured: dict[str, object] = {}
+
+    class FakeConnector:
+        def list_newsletters(
+            self,
+            senders=None,
+            labels=None,
+            raw_query=None,
+            max_results: int = 20,
+            newer_than_days: int | None = 7,
+        ) -> list[NewsletterMessage]:
+            captured["senders"] = senders
+            captured["labels"] = labels
+            captured["raw_query"] = raw_query
+            captured["max_results"] = max_results
+            captured["newer_than_days"] = newer_than_days
+            return [
+                NewsletterMessage(
+                    message_id="gmail-alphasignal-message-1",
+                    thread_id="gmail-alphasignal-thread-1",
+                    subject="⚡️ Meta Muse Spark: 10x efficiency with parallel agent inference",
+                    sender="AlphaSignal <news@alphasignal.ai>",
+                    published_at=datetime(2026, 4, 9, 16, 14, 36, tzinfo=UTC),
+                    text_body="Top stories from the AlphaSignal briefing.",
+                    html_body=html,
+                    outbound_links=[
+                        "https://app.alphasignal.ai/c?lid=story-1",
+                        "https://app.alphasignal.ai/c?lid=signal-1",
+                    ],
+                    permalink="https://mail.google.com/mail/u/0/#inbox/gmail-alphasignal-message-1",
+                )
+            ]
+
+    monkeypatch.setattr(service, "_build_gmail_connector", lambda: FakeConnector())
+
+    result = service.sync_enabled_sources(trigger="test_sync")
+    documents = service.store.list_raw_documents()
+
+    assert result.source_count == 1
+    assert result.synced_document_count == 3
+    assert result.failed_source_count == 0
+    assert captured == {
+        "senders": ["news@alphasignal.ai"],
+        "labels": None,
+        "raw_query": None,
+        "max_results": 20,
+        "newer_than_days": 7,
+    }
+    assert len(documents) == 3
+
+    parent = next(document for document in documents if document.frontmatter.doc_role == "primary")
+    children = [document for document in documents if document.frontmatter.doc_role == "derived"]
+
+    assert parent.frontmatter.kind == "newsletter"
+    assert parent.frontmatter.source_name == "AlphaSignal Email"
+    assert parent.frontmatter.index_visibility == "hidden"
+    assert parent.frontmatter.asset_paths == ["original.html"]
+    assert "## Top News" in parent.body
+    assert "## Signals" in parent.body
+
+    assert len(children) == 2
+    assert {child.frontmatter.parent_id for child in children} == {parent.frontmatter.id}
+    assert {child.frontmatter.canonical_url for child in children} == {
+        "https://app.alphasignal.ai/c?lid=story-1",
+        "https://app.alphasignal.ai/c?lid=signal-1",
+    }
+    assert all("sub-document" in child.frontmatter.tags for child in children)
+
+
 def test_tldr_gmail_source_sync_writes_newsletter_raw_documents(client, monkeypatch) -> None:
     service = VaultSourceIngestionService()
     service.settings.vault_source_pipelines_enabled = True
@@ -1147,6 +2221,7 @@ def test_tldr_gmail_source_sync_writes_newsletter_raw_documents(client, monkeypa
     assert child.frontmatter.kind == "article"
     assert child.frontmatter.parent_id == parent.frontmatter.id
     assert child.frontmatter.index_visibility == "visible"
+    assert "sub-document" in child.frontmatter.tags
     assert child.frontmatter.id.startswith("2026-04-07-tldr-email-story-")
     assert child.frontmatter.canonical_url == "https://example.com/story"
 
@@ -1161,6 +2236,7 @@ def test_tldr_gmail_source_sync_writes_newsletter_raw_documents(client, monkeypa
     assert visible_items[0].kind == "article"
     assert visible_items[0].content_type == ContentType.ARTICLE
     assert visible_items[0].parent_id == parent.frontmatter.id
+    assert "sub-document" in visible_items[0].tags
     assert hidden_items[0].kind == "newsletter"
 
 

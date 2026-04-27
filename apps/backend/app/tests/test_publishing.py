@@ -36,6 +36,11 @@ def test_publish_latest_writes_viewer_bundle_inside_vault(client) -> None:
 
     assert summary.edition_id == f"day:{seeded['brief_date'].isoformat()}"
     assert (store.viewer_dir / "index.html").exists()
+    assert (store.viewer_dir / "app-config.json").exists()
+    assert not (store.viewer_dir / "app-config.example.json").exists()
+    assert (store.viewer_dir / "assets").is_dir()
+    assert (store.viewer_dir / "manifest.webmanifest").exists()
+    assert (store.viewer_dir / "sw.js").exists()
     assert (store.viewer_dir / "archive.json").exists()
     assert (store.viewer_dir / "latest" / "index.html").exists()
     assert (store.viewer_dir / "latest" / "manifest.json").exists()
@@ -47,3 +52,11 @@ def test_publish_latest_writes_viewer_bundle_inside_vault(client) -> None:
     published_index = store.load_published_index()
     assert published_index.latest is not None
     assert published_index.latest.edition_id == summary.edition_id
+
+    app_config = json.loads((store.viewer_dir / "app-config.json").read_text(encoding="utf-8"))
+    assert app_config["mode"] == "hosted"
+    assert app_config["cloudKit"] is None
+    assert app_config["staticPublishedBasePath"] == "."
+
+    shell_html = (store.viewer_dir / "index.html").read_text(encoding="utf-8")
+    assert '<div id="root"></div>' in shell_html

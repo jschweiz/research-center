@@ -12,7 +12,41 @@ from app.vault.models import RawDocumentFrontmatter
 from app.vault.store import VaultStore
 
 
+def seed_published_shell() -> None:
+    settings = get_settings()
+    shell_dir = settings.published_web_dist_dir
+    (shell_dir / "assets").mkdir(parents=True, exist_ok=True)
+    (shell_dir / "assets" / "index-test.js").write_text("console.log('published shell');\n", encoding="utf-8")
+    (shell_dir / "assets" / "index-test.css").write_text("body { background: #ece4d3; }\n", encoding="utf-8")
+    (shell_dir / "index.html").write_text(
+        """<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Research Center</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./assets/index-test.js"></script>
+  </body>
+</html>
+""",
+        encoding="utf-8",
+    )
+    (shell_dir / "manifest.webmanifest").write_text(
+        '{"name":"Research Center","short_name":"RC","start_url":"./","scope":"./","display":"standalone"}\n',
+        encoding="utf-8",
+    )
+    (shell_dir / "registerSW.js").write_text("console.log('register sw');\n", encoding="utf-8")
+    (shell_dir / "sw.js").write_text("self.addEventListener('fetch', () => {});\n", encoding="utf-8")
+    (shell_dir / "workbox-test.js").write_text("console.log('workbox');\n", encoding="utf-8")
+    for filename in ("apple-touch-icon.png", "icon-192.png", "icon-512.png", "icon.svg"):
+        (shell_dir / filename).write_bytes(b"test-asset")
+
+
 def seed_publishable_vault() -> dict[str, object]:
+    seed_published_shell()
     store = VaultStore()
     store.ensure_layout()
     brief_service = VaultBriefService()

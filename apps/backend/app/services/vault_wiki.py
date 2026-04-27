@@ -4,6 +4,7 @@ import posixpath
 from collections import defaultdict
 from pathlib import Path
 
+from app.core.external_urls import resolve_external_url
 from app.db.models import IngestionRunType, RunStatus
 from app.schemas.ops import OperationBasicInfoRead
 from app.services.vault_insights import VaultInsightsService
@@ -379,7 +380,7 @@ class VaultWikiService:
             "## Metadata",
             "",
             f"- Source: {item.source_name}",
-            f"- Canonical URL: {item.canonical_url}",
+            f"- Canonical URL: {resolve_external_url(item.canonical_url)}",
             f"- Document kind: {item.kind}",
         ]
         if item.published_at is not None:

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete, or_, select, text
+from sqlalchemy import and_, case, delete, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.core.config import get_settings
@@ -20,6 +20,7 @@ from app.db.models import (
     VaultPairingCode,
     VaultProjectionState,
     VaultPublishedEdition,
+    VaultReadItem,
     VaultRawDocument,
     VaultRun,
     VaultRunEvent,
@@ -52,7 +53,9 @@ from app.vault.models import (
     PairingCodesState,
     PairingCodeState,
     PublishedIndex,
+    ReadItemsState,
     RawDocument,
+    SUB_DOCUMENT_TAG,
     StarredItemsState,
     VaultItemRecord,
     VaultSourceDefinition,
@@ -296,6 +299,25 @@ class VaultStateRepository:
             now = _utcnow()
             for offset, item_id in enumerate(state.item_ids):
                 db.add(VaultStarredItem(item_id=item_id, starred_at=now))
+                now = now.replace(microsecond=min(now.microsecond + offset + 1, 999999))
+            db.commit()
+
+    def load_read_items(self) -> ReadItemsState:
+        self.ensure_bootstrap()
+        with self._session() as db:
+            item_ids = list(
+                db.scalars(
+                    select(VaultReadItem.item_id).order_by(VaultReadItem.read_at.desc())
+                ).all()
+            )
+        return ReadItemsState(item_ids=item_ids)
+
+    def save_read_items(self, state: ReadItemsState) -> None:
+        with self._session() as db:
+            db.execute(delete(VaultReadItem))
+            now = _utcnow()
+            for offset, item_id in enumerate(state.item_ids):
+                db.add(VaultReadItem(item_id=item_id, read_at=now))
                 now = now.replace(microsecond=min(now.microsecond + offset + 1, 999999))
             db.commit()
 
@@ -605,6 +627,142 @@ class VaultStateRepository:
                 reverse=True,
             )
         return items
+
+    def query_items_page(
+        self,
+        *,
+        query: str | None = None,
+        status_filter: str | None = None,
+        content_type: str | None = None,
+        source_id: str | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        sort: str = "importance",
+        include_hidden_primary_newsletters: bool = False,
+        include_sub_documents: bool = True,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> tuple[list[VaultItemRecord], int]:
+        self.load_items_index()
+        matched_ids: set[str] | None = None
+        if query:
+            matched_ids = self._search_item_ids(query)
+            if not matched_ids:
+                return [], 0
+
+        reference_timestamp = self._item_reference_timestamp_expression()
+        with self._session() as db:
+            stmt = select(VaultItemProjection)
+            if matched_ids is not None:
+                stmt = stmt.where(VaultItemProjection.item_id.in_(matched_ids))
+            if status_filter:
+                stmt = stmt.where(VaultItemProjection.status == status_filter)
+            else:
+                stmt = stmt.where(VaultItemProjection.status != "archived")
+            if content_type:
+                try:
+                    stmt = stmt.where(VaultItemProjection.content_type == ContentType(content_type))
+                except ValueError:
+                    return [], 0
+            if source_id:
+                source_name = None
+                source = db.get(VaultSource, source_id)
+                if source is not None:
+                    source_name = source.name
+                stmt = stmt.where(
+                    or_(
+                        VaultItemProjection.source_id == source_id,
+                        VaultItemProjection.source_name == source_id,
+                        VaultItemProjection.source_name == source_name,
+                        VaultItemProjection.kind == source_id,
+                    )
+                )
+            if date_from is not None:
+                stmt = stmt.where(reference_timestamp >= self._local_day_start_utc(date_from))
+            if date_to is not None:
+                stmt = stmt.where(
+                    reference_timestamp < self._local_day_start_utc(date_to + timedelta(days=1))
+                )
+
+            visibility_filter = VaultItemProjection.index_visibility != "hidden"
+            if include_hidden_primary_newsletters:
+                visibility_filter = or_(
+                    visibility_filter,
+                    and_(
+                        VaultItemProjection.content_type == ContentType.NEWSLETTER,
+                        VaultItemProjection.doc_role == "primary",
+                    ),
+                )
+            stmt = stmt.where(visibility_filter)
+            if not include_sub_documents:
+                stmt = stmt.where(VaultItemProjection.doc_role != "derived")
+                stmt = stmt.where(
+                    func.lower(VaultItemProjection.tags_text).not_like(f"%{SUB_DOCUMENT_TAG}%")
+                )
+
+            total = int(db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+
+            if sort == "newest":
+                stmt = stmt.order_by(
+                    self._sort_timestamp_expression().desc(),
+                    VaultItemProjection.title.asc(),
+                )
+            elif sort == "oldest":
+                stmt = stmt.order_by(
+                    self._sort_timestamp_expression().asc(),
+                    VaultItemProjection.title.asc(),
+                )
+            else:
+                stmt = stmt.order_by(
+                    VaultItemProjection.total_score.desc(),
+                    VaultItemProjection.trend_score.desc(),
+                    self._content_type_bonus_expression().desc(),
+                    reference_timestamp.desc(),
+                    VaultItemProjection.title.asc(),
+                )
+
+            if offset > 0:
+                stmt = stmt.offset(offset)
+            if limit is not None:
+                stmt = stmt.limit(limit)
+
+            rows = list(db.scalars(stmt).all())
+        return [VaultItemRecord.model_validate(row.payload_json) for row in rows], total
+
+    @staticmethod
+    def _item_reference_timestamp_expression():
+        return func.coalesce(
+            VaultItemProjection.published_at,
+            VaultItemProjection.fetched_at,
+            VaultItemProjection.ingested_at,
+        )
+
+    @staticmethod
+    def _sort_timestamp_expression():
+        return func.coalesce(
+            VaultItemProjection.published_at,
+            VaultItemProjection.ingested_at,
+        )
+
+    @staticmethod
+    def _content_type_bonus_expression():
+        return case(
+            (VaultItemProjection.content_type == ContentType.PAPER, 1.4),
+            (VaultItemProjection.content_type == ContentType.POST, 1.2),
+            (VaultItemProjection.content_type == ContentType.ARTICLE, 1.0),
+            (VaultItemProjection.content_type == ContentType.NEWS, 0.95),
+            (VaultItemProjection.content_type == ContentType.NEWSLETTER, 0.8),
+            (VaultItemProjection.content_type == ContentType.SIGNAL, 0.7),
+            (VaultItemProjection.content_type == ContentType.THREAD, 0.65),
+            else_=1.0,
+        )
+
+    def _local_day_start_utc(self, value: date) -> datetime:
+        try:
+            timezone = ZoneInfo(self.settings.timezone)
+        except Exception:
+            timezone = UTC
+        return datetime.combine(value, time.min, tzinfo=timezone).astimezone(UTC)
 
     def _item_reference_date(self, item: VaultItemRecord) -> date | None:
         reference = item.published_at or item.fetched_at or item.ingested_at

@@ -9,6 +9,8 @@ from app.db.models import ContentType, ScoreBucket
 from app.schemas.ops import IngestionRunHistoryRead
 from app.schemas.published import PublishedEditionSummaryRead
 
+SUB_DOCUMENT_TAG = "sub-document"
+
 
 class LightweightJudgeScore(BaseModel):
     relevance_score: float = 0.0
@@ -105,6 +107,10 @@ class VaultSourceDefinition(BaseModel):
 
 class VaultSourcesConfig(BaseModel):
     sources: list[VaultSourceDefinition] = Field(default_factory=list)
+
+
+class DefaultSourcesState(BaseModel):
+    catalog_version: int = 0
 
 
 class WikiPageFrontmatter(BaseModel):
@@ -284,6 +290,10 @@ class PairedDevicesState(BaseModel):
 
 
 class StarredItemsState(BaseModel):
+    item_ids: list[str] = Field(default_factory=list)
+
+
+class ReadItemsState(BaseModel):
     item_ids: list[str] = Field(default_factory=list)
 
 

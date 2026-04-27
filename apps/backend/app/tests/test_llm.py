@@ -925,9 +925,9 @@ def test_llm_client_uses_schema_constrained_ollama_output_for_lightweight_scorin
     payload = module.LLMClient().judge_lightweight_document(
         {
             "title": "Verifier routing for faster triage",
-            "source_name": "Example Research",
-            "source_id": "example-research",
-            "content_type": "article",
+            "source_name": "alphaXiv Papers",
+            "source_id": "alphaxiv-paper",
+            "content_type": "paper",
             "authors": ["Casey Researcher"],
             "tags": ["verifier routing"],
             "short_summary": "A workflow note about verifier routing and triage speed.",
@@ -939,13 +939,37 @@ def test_llm_client_uses_schema_constrained_ollama_output_for_lightweight_scorin
             "favorite_sources": ["Example Research"],
             "ignored_topics": ["consumer gadget news"],
             "prompt_guidance": {"enrichment": "Prefer workflow leverage."},
+            "scoring_rubric": {
+                "persona": "AI researcher training large-scale frontier LLMs.",
+                "highest_priority_topics": [
+                    "post-training methods for LLMs",
+                    "reasoning in LLMs",
+                ],
+                "deprioritize": [
+                    "fellowships and org announcements",
+                    "generic benchmark churn",
+                ],
+                "alphaxiv_preferences": [
+                    "Treat 50+ X likes as a strong signal.",
+                ],
+            },
         },
         source_context={
-            "source_id": "example-research",
-            "name": "Example Research",
-            "type": "website",
-            "description": "Applied research notes.",
-            "tags": ["workflow"],
+            "source_id": "alphaxiv-paper",
+            "name": "alphaXiv Papers",
+            "type": "paper",
+            "description": "Community-ranked AI papers.",
+            "tags": ["paper", "research"],
+            "alphaxiv_metrics": {
+                "public_total_votes": 63,
+                "total_votes": 91,
+                "visits_last_7_days": 864,
+                "visits_all": 1452,
+                "x_likes": 52,
+                "citations_count": 6,
+            },
+            "alphaxiv_engagement_tier": "high",
+            "alphaxiv_engagement_summary": "52 X likes, 63 public votes, 864 visits in the last 7 days",
         },
     )
 
@@ -954,6 +978,9 @@ def test_llm_client_uses_schema_constrained_ollama_output_for_lightweight_scorin
     assert request_payload["format"] == module.LIGHTWEIGHT_SCORING_SCHEMA
     assert "<json_schema>" in str(request_payload["prompt"])
     assert '"relevance_score"' in str(request_payload["prompt"])
+    assert "<research_rubric>" in str(request_payload["prompt"])
+    assert "frontier-LLM researcher" in str(request_payload["prompt"])
+    assert "alphaXiv X likes: 52" in str(request_payload["prompt"])
     assert payload["relevance_score"] == 0.81
     assert payload["topic_fit_score"] == 0.88
     assert payload["bucket_hint"] == "must_read"

@@ -55,10 +55,12 @@ def inject_source(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found.")
 
     requested_max_items = payload.max_items if payload else None
+    requested_alphaxiv_sort = payload.alphaxiv_sort if payload else None
     try:
         operation_run_id = VaultOperationService().run_source_pipeline(
             source_id=source_id,
             max_items=requested_max_items,
+            alphaxiv_sort=requested_alphaxiv_sort,
         )
     except SourceFetchCancelledError as exc:
         return JobResponse(
@@ -71,13 +73,19 @@ def inject_source(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     effective_max_items = requested_max_items or source.max_items
+    alphaxiv_sort_suffix = (
+        f" using alphaXiv {requested_alphaxiv_sort} sort"
+        if source.custom_pipeline_id == "alphaxiv-paper" and requested_alphaxiv_sort
+        else ""
+    )
     return JobResponse(
         queued=False,
         task_name="source_inject",
         detail=(
-            "Source fetch, lightweight enrichment, and index rebuild completed for "
+            "Source fetch completed for "
             f"{source.name} with a cap of {effective_max_items} document"
-            f"{'' if effective_max_items == 1 else 's'}."
+            f"{'' if effective_max_items == 1 else 's'}{alphaxiv_sort_suffix}. "
+            "Lightweight enrichment and index refresh remain manual."
         ),
         operation_run_id=operation_run_id,
     )

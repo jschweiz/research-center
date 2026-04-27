@@ -9,9 +9,10 @@ from starlette.requests import Request
 
 from app.api.deps import get_local_control_device
 from app.core.config import get_settings
+from app.integrations.zotero import ZoteroExportResult
 from app.services.items import ItemService
-from app.services.vault_ingestion import VaultIngestionService
 from app.services.local_control import LocalControlService
+from app.services.vault_ingestion import VaultIngestionService
 from app.tests.support_publication import seed_publishable_vault
 from app.vault.models import RawDocumentFrontmatter
 from app.vault.store import VaultStore
@@ -63,7 +64,7 @@ def test_local_control_still_requires_pairing_token_for_non_loopback_requests(
 def test_local_control_requires_paired_token_and_returns_vault_status(
     client: TestClient,
 ) -> None:
-    seed_publishable_vault()
+    seeded = seed_publishable_vault()
     pairing = LocalControlService().create_pairing_code(label="Lab iPad")
 
     unauthenticated = client.get("/api/local-control/status")
@@ -87,6 +88,8 @@ def test_local_control_requires_paired_token_and_returns_vault_status(
     assert status_payload["vault_root_dir"]
     assert status_payload["viewer_bundle_dir"]
     assert status_payload["lightweight_pending_count"] == 1
+    assert status_payload["lightweight_metadata_pending_count"] == 1
+    assert status_payload["lightweight_scoring_pending_count"] == 0
     assert status_payload["items_index"]["up_to_date"] is True
     assert status_payload["items_index"]["stale_document_count"] == 0
     assert status_payload["items_index"]["indexed_item_count"] == 1
@@ -107,11 +110,12 @@ def test_local_control_requires_paired_token_and_returns_vault_status(
     )
     assert documents_response.status_code == 200
     documents_payload = documents_response.json()
-    assert len(documents_payload) == 1
-    assert documents_payload[0]["title"] == "Signal from the publishing test feed"
+    assert documents_payload["total"] == 1
+    assert len(documents_payload["items"]) == 1
+    assert documents_payload["items"][0]["title"] == "Signal from the publishing test feed"
 
     detail_response = client.get(
-        f"/api/local-control/documents/{documents_payload[0]['id']}",
+        f"/api/local-control/documents/{documents_payload['items'][0]['id']}",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert detail_response.status_code == 200
@@ -133,6 +137,23 @@ def test_local_control_requires_paired_token_and_returns_vault_status(
     )
     assert availability_response.status_code == 200
     assert availability_response.json()["days"]
+
+    today_brief_response = client.get(
+        "/api/local-control/briefs/today",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert today_brief_response.status_code == 200
+    today_brief_payload = today_brief_response.json()
+    assert today_brief_payload["brief_date"] == seeded["brief_date"].isoformat()
+    assert today_brief_payload["title"]
+    assert today_brief_payload["editorial_shortlist"]
+
+    dated_brief_response = client.get(
+        f"/api/local-control/briefs/{seeded['brief_date'].isoformat()}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert dated_brief_response.status_code == 200
+    assert dated_brief_response.json()["brief_date"] == seeded["brief_date"].isoformat()
 
     profile_response = client.get(
         "/api/local-control/profile",
@@ -250,7 +271,8 @@ def test_local_control_documents_include_hidden_primary_newsletters(
     )
     assert documents_response.status_code == 200
     documents_payload = documents_response.json()
-    assert {entry["id"] for entry in documents_payload} == {parent.id, child.id}
+    assert documents_payload["total"] == 2
+    assert {entry["id"] for entry in documents_payload["items"]} == {parent.id, child.id}
 
     newsletters_response = client.get(
         "/api/local-control/documents",
@@ -259,8 +281,19 @@ def test_local_control_documents_include_hidden_primary_newsletters(
     )
     assert newsletters_response.status_code == 200
     newsletters_payload = newsletters_response.json()
-    assert [entry["id"] for entry in newsletters_payload] == [parent.id]
-    assert newsletters_payload[0]["content_type"] == "newsletter"
+    assert newsletters_payload["total"] == 1
+    assert [entry["id"] for entry in newsletters_payload["items"]] == [parent.id]
+    assert newsletters_payload["items"][0]["content_type"] == "newsletter"
+
+    hidden_subdocuments_response = client.get(
+        "/api/local-control/documents",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"source_id": "tldr-email", "hide_sub_documents": "true"},
+    )
+    assert hidden_subdocuments_response.status_code == 200
+    hidden_subdocuments_payload = hidden_subdocuments_response.json()
+    assert hidden_subdocuments_payload["total"] == 1
+    assert [entry["id"] for entry in hidden_subdocuments_payload["items"]] == [parent.id]
 
 
 def test_local_control_documents_filter_by_date_range_and_oldest_sort(
@@ -326,7 +359,230 @@ def test_local_control_documents_filter_by_date_range_and_oldest_sort(
 
     assert response.status_code == 200
     payload = response.json()
-    assert [entry["id"] for entry in payload] == ["dated-doc-middle", "dated-doc-late"]
+    assert payload["total"] == 2
+    assert [entry["id"] for entry in payload["items"]] == ["dated-doc-middle", "dated-doc-late"]
+
+
+def test_local_control_documents_support_pagination(
+    client: TestClient,
+) -> None:
+    store = VaultStore()
+    paged_documents = [
+        ("pagination-doc-early", "Early page document", datetime(2026, 4, 3, 12, 0, tzinfo=UTC)),
+        ("pagination-doc-middle", "Middle page document", datetime(2026, 4, 5, 12, 0, tzinfo=UTC)),
+        ("pagination-doc-late", "Late page document", datetime(2026, 4, 7, 12, 0, tzinfo=UTC)),
+    ]
+
+    for item_id, title, published_at in paged_documents:
+        frontmatter = RawDocumentFrontmatter(
+            id=item_id,
+            kind="article",
+            title=title,
+            source_url=f"https://example.com/{item_id}",
+            source_name="Pagination Feed",
+            authors=["Research Center"],
+            published_at=published_at,
+            ingested_at=published_at,
+            content_hash="",
+            tags=["pagination"],
+            status="active",
+            asset_paths=[],
+            source_id="pagination-feed",
+            source_pipeline_id="pagination-feed",
+            external_key=f"https://example.com/{item_id}",
+            canonical_url=f"https://example.com/{item_id}",
+            doc_role="primary",
+            parent_id=None,
+            index_visibility="visible",
+            fetched_at=published_at,
+        )
+        store.write_raw_document(
+            kind=frontmatter.kind,
+            doc_id=frontmatter.id,
+            frontmatter=frontmatter,
+            body=f"# {title}\n\nUsed to verify local-control pagination.",
+        )
+
+    VaultIngestionService().rebuild_items_index(trigger="test_local_control_document_pagination")
+
+    pairing = LocalControlService().create_pairing_code(label="Lab iPad")
+    redeem = client.post(
+        "/api/local-control/pair/redeem",
+        json={"pairing_token": pairing.pairing_token},
+    )
+    assert redeem.status_code == 200
+    token = redeem.json()["access_token"]
+
+    response = client.get(
+        "/api/local-control/documents",
+        headers={"Authorization": f"Bearer {token}"},
+        params={
+            "source_id": "pagination-feed",
+            "sort": "newest",
+            "page": 2,
+            "page_size": 2,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 3
+    assert [entry["id"] for entry in payload["items"]] == ["pagination-doc-early"]
+
+
+def test_local_control_documents_can_be_marked_read_and_starred(
+    client: TestClient,
+) -> None:
+    store = VaultStore()
+    published_at = datetime(2026, 4, 6, 9, 0, tzinfo=UTC)
+    frontmatter = RawDocumentFrontmatter(
+        id="local-control-read-item",
+        kind="article",
+        title="Read tracking test document",
+        source_url="https://example.com/read-tracking",
+        source_name="Read Tracking Feed",
+        authors=["Research Center"],
+        published_at=published_at,
+        ingested_at=published_at,
+        content_hash="",
+        tags=["read-tracking"],
+        status="active",
+        asset_paths=[],
+        source_id="read-tracking-feed",
+        source_pipeline_id="read-tracking-feed",
+        external_key="https://example.com/read-tracking",
+        canonical_url="https://example.com/read-tracking",
+        doc_role="primary",
+        parent_id=None,
+        index_visibility="visible",
+        fetched_at=published_at,
+    )
+    store.write_raw_document(
+        kind=frontmatter.kind,
+        doc_id=frontmatter.id,
+        frontmatter=frontmatter,
+        body="# Read tracking test document\n\nUsed to verify local-control read and star actions.",
+    )
+
+    VaultIngestionService().rebuild_items_index(trigger="test_local_control_read_and_star")
+
+    pairing = LocalControlService().create_pairing_code(label="Lab iPad")
+    redeem = client.post(
+        "/api/local-control/pair/redeem",
+        json={"pairing_token": pairing.pairing_token},
+    )
+    assert redeem.status_code == 200
+    token = redeem.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    initial_response = client.get(
+        "/api/local-control/documents",
+        headers=headers,
+        params={"source_id": "read-tracking-feed"},
+    )
+    assert initial_response.status_code == 200
+    initial_payload = initial_response.json()
+    assert initial_payload["total"] == 1
+    assert [entry["id"] for entry in initial_payload["items"]] == [frontmatter.id]
+    assert initial_payload["items"][0]["read"] is False
+    assert initial_payload["items"][0]["starred"] is False
+    assert initial_payload["items"][0]["score_breakdown"]["relevance_score"] >= 0.0
+
+    read_response = client.post(f"/api/local-control/documents/{frontmatter.id}/read", headers=headers)
+    assert read_response.status_code == 200
+    assert read_response.json()["detail"] == "Item marked as read."
+
+    detail_response = client.get(f"/api/local-control/documents/{frontmatter.id}", headers=headers)
+    assert detail_response.status_code == 200
+    assert detail_response.json()["read"] is True
+    assert detail_response.json()["starred"] is False
+
+    star_response = client.post(f"/api/local-control/documents/{frontmatter.id}/star", headers=headers)
+    assert star_response.status_code == 200
+    assert star_response.json()["detail"] == "Marked as important."
+
+    updated_response = client.get(
+        "/api/local-control/documents",
+        headers=headers,
+        params={"source_id": "read-tracking-feed"},
+    )
+    assert updated_response.status_code == 200
+    updated_payload = updated_response.json()
+    assert updated_payload["items"][0]["read"] is True
+    assert updated_payload["items"][0]["starred"] is True
+
+
+def test_local_control_documents_can_be_saved_to_zotero(
+    authenticated_client: TestClient,
+    fake_extractor: None,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.integrations.zotero.ZoteroClient.get_current_key_info",
+        lambda self: type(
+            "KeyInfo",
+            (),
+            {
+                "user_id": 12345,
+                "username": "reader",
+                "access": {"user": {"library": True, "write": True}},
+            },
+        )(),
+    )
+    connection_response = authenticated_client.post(
+        "/api/connections/zotero",
+        json={
+            "label": "Primary Zotero",
+            "payload": {"api_key": "secret-token", "library_id": "12345"},
+            "metadata_json": {
+                "library_type": "users",
+                "collection_name": "Research Center / Papers",
+                "auto_tag_vocabulary": [],
+            },
+        },
+    )
+    assert connection_response.status_code == 201
+
+    created = authenticated_client.post("/api/items/import-url", json={"url": "https://example.com/article"})
+    assert created.status_code == 201
+    item_id = created.json()["id"]
+
+    captured: dict[str, object] = {}
+
+    def _save(self, **kwargs):
+        captured["collection_name"] = kwargs.get("collection_name")
+        captured["tags"] = kwargs.get("tags")
+        return ZoteroExportResult(
+            success=True,
+            confidence_score=0.92,
+            detail="Saved to Zotero.",
+            response_payload={"successful": {"0": "ABCD1234"}},
+        )
+
+    monkeypatch.setattr("app.integrations.zotero.ZoteroClient.save_item", _save)
+
+    pairing = LocalControlService().create_pairing_code(label="Lab iPad")
+    redeem = authenticated_client.post(
+        "/api/local-control/pair/redeem",
+        json={"pairing_token": pairing.pairing_token},
+    )
+    assert redeem.status_code == 200
+    headers = {"Authorization": f"Bearer {redeem.json()['access_token']}"}
+
+    save_response = authenticated_client.post(
+        f"/api/local-control/documents/{item_id}/save-to-zotero",
+        headers=headers,
+        json={},
+    )
+    assert save_response.status_code == 200
+    assert save_response.json()["triage_status"] == "saved"
+    assert save_response.json()["detail"] == "Saved to Zotero."
+    assert captured["collection_name"] == "Research Center / Papers"
+    assert captured["tags"] == []
+
+    detail_response = authenticated_client.get(f"/api/local-control/documents/{item_id}", headers=headers)
+    assert detail_response.status_code == 200
+    assert detail_response.json()["read"] is True
 
 
 def test_local_control_rebuild_index_allows_duplicate_canonical_urls(
@@ -409,11 +665,12 @@ def test_local_control_rebuild_index_allows_duplicate_canonical_urls(
     )
     assert documents_response.status_code == 200
     documents_payload = documents_response.json()
-    assert {entry["id"] for entry in documents_payload} == {
+    assert documents_payload["total"] == 2
+    assert {entry["id"] for entry in documents_payload["items"]} == {
         "duplicate-medium-story-1",
         "duplicate-medium-story-2",
     }
-    assert {entry["canonical_url"] for entry in documents_payload} == {shared_url}
+    assert {entry["canonical_url"] for entry in documents_payload["items"]} == {shared_url}
 
 
 def test_local_control_publish_job_uses_paired_device_and_returns_publication_summary(
@@ -536,9 +793,16 @@ def test_local_control_source_inject_uses_source_pipeline_with_max_items_overrid
 
     called: dict[str, object] = {}
 
-    def _fake_run_source_pipeline(self, *, source_id: str, max_items: int | None = None) -> str:
+    def _fake_run_source_pipeline(
+        self,
+        *,
+        source_id: str,
+        max_items: int | None = None,
+        alphaxiv_sort: str | None = None,
+    ) -> str:
         called["source_id"] = source_id
         called["max_items"] = max_items
+        called["alphaxiv_sort"] = alphaxiv_sort
         return "source-run-123"
 
     monkeypatch.setattr(
@@ -556,8 +820,64 @@ def test_local_control_source_inject_uses_source_pipeline_with_max_items_overrid
     payload = response.json()
     assert payload["task_name"] == "source_inject"
     assert payload["operation_run_id"] == "source-run-123"
-    assert "42 documents" in payload["detail"]
-    assert called == {"source_id": "openai-website", "max_items": 42}
+    assert payload["detail"] == (
+        "Source fetch completed for OpenAI Website with a cap of 42 documents. "
+        "Lightweight enrichment and index refresh remain manual."
+    )
+    assert called == {"source_id": "openai-website", "max_items": 42, "alphaxiv_sort": None}
+
+
+def test_local_control_source_inject_accepts_alphaxiv_sort_override(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pairing = LocalControlService().create_pairing_code(label="AlphaXiv Fetch iPad")
+
+    redeem = client.post(
+        "/api/local-control/pair/redeem",
+        json={"pairing_token": pairing.pairing_token},
+    )
+    assert redeem.status_code == 200
+    token = redeem.json()["access_token"]
+
+    called: dict[str, object] = {}
+
+    def _fake_run_source_pipeline(
+        self,
+        *,
+        source_id: str,
+        max_items: int | None = None,
+        alphaxiv_sort: str | None = None,
+    ) -> str:
+        called["source_id"] = source_id
+        called["max_items"] = max_items
+        called["alphaxiv_sort"] = alphaxiv_sort
+        return "alphaxiv-run-456"
+
+    monkeypatch.setattr(
+        "app.services.vault_operations.VaultOperationService.run_source_pipeline",
+        _fake_run_source_pipeline,
+    )
+
+    response = client.post(
+        "/api/local-control/jobs/sources/alphaxiv-paper/inject",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"max_items": 18, "alphaxiv_sort": "Likes"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task_name"] == "source_inject"
+    assert payload["operation_run_id"] == "alphaxiv-run-456"
+    assert payload["detail"] == (
+        "Source fetch completed for alphaXiv Papers with a cap of 18 documents using alphaXiv Likes sort. "
+        "Lightweight enrichment and index refresh remain manual."
+    )
+    assert called == {
+        "source_id": "alphaxiv-paper",
+        "max_items": 18,
+        "alphaxiv_sort": "Likes",
+    }
 
 
 def test_local_control_source_stop_requests_running_fetch(
@@ -637,6 +957,88 @@ def test_local_control_lightweight_stop_requests_running_enrichment(
     assert payload["task_name"] == "stop_lightweight_enrich"
     assert payload["operation_run_id"] == "lightweight-run-789"
     assert "Stop requested for lightweight enrichment" in payload["detail"]
+    assert called == {"requested": True}
+
+
+def test_local_control_lightweight_metadata_job_uses_metadata_phase(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pairing = LocalControlService().create_pairing_code(label="Metadata iPad")
+
+    redeem = client.post(
+        "/api/local-control/pair/redeem",
+        json={"pairing_token": pairing.pairing_token},
+    )
+    assert redeem.status_code == 200
+    token = redeem.json()["access_token"]
+
+    called: dict[str, object] = {}
+
+    class _Run:
+        id = "lightweight-metadata-run-123"
+        summary = "Lightweight metadata refresh updated 3 documents."
+
+    def _fake_lightweight_metadata_enrich(self):
+        called["requested"] = True
+        return _Run()
+
+    monkeypatch.setattr(
+        "app.services.vault_operations.VaultOperationService.lightweight_metadata_enrich",
+        _fake_lightweight_metadata_enrich,
+    )
+
+    response = client.post(
+        "/api/local-control/jobs/lightweight-metadata",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task_name"] == "lightweight_metadata"
+    assert payload["operation_run_id"] == "lightweight-metadata-run-123"
+    assert payload["detail"] == "Lightweight metadata refresh updated 3 documents."
+    assert called == {"requested": True}
+
+
+def test_local_control_lightweight_scoring_job_uses_scoring_phase(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pairing = LocalControlService().create_pairing_code(label="Scoring iPad")
+
+    redeem = client.post(
+        "/api/local-control/pair/redeem",
+        json={"pairing_token": pairing.pairing_token},
+    )
+    assert redeem.status_code == 200
+    token = redeem.json()["access_token"]
+
+    called: dict[str, object] = {}
+
+    class _Run:
+        id = "lightweight-scoring-run-456"
+        summary = "Lightweight scoring refresh updated 2 documents."
+
+    def _fake_lightweight_scoring_enrich(self):
+        called["requested"] = True
+        return _Run()
+
+    monkeypatch.setattr(
+        "app.services.vault_operations.VaultOperationService.lightweight_scoring_enrich",
+        _fake_lightweight_scoring_enrich,
+    )
+
+    response = client.post(
+        "/api/local-control/jobs/lightweight-scoring",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task_name"] == "lightweight_scoring"
+    assert payload["operation_run_id"] == "lightweight-scoring-run-456"
+    assert payload["detail"] == "Lightweight scoring refresh updated 2 documents."
     assert called == {"requested": True}
 
 

@@ -15,7 +15,7 @@ The backend expects this structure under `VAULT_ROOT_DIR`:
 - `raw/<kind>/<doc-id>/source.md`
 - `wiki/<namespace>/<slug>.md`
 - `briefs/daily/YYYY-MM-DD/{brief.md,brief.json,audio.mp3,slides.md}`
-- `outputs/viewer/{latest/,history/}`
+- `outputs/viewer/{index.html,app-config.json,latest/,history/}`
 
 Source config, runs, leases, stop requests, pairing state, stars, AI budgets, and all materialized indexes now live in the local SQLite runtime at `DATABASE_URL`.
 Secrets and AI trace artifacts are stored outside the vault in `LOCAL_STATE_DIR`.
@@ -86,6 +86,7 @@ Notes:
 - `openai-website`: website posts into `raw/blog-post/`
 - `anthropic-research`: research pages into `raw/blog-post/`
 - `mistral-research`: Mistral research news into `raw/blog-post/`
+- `the-batch-research`: DeepLearning.AI The Batch research-tag posts into `raw/blog-post/`
 - `tldr-email`: Gmail newsletters into `raw/newsletter/`
 - `medium-email`: Gmail digests into `raw/newsletter/`
 
@@ -125,7 +126,7 @@ What each phase does:
 - `compile-wiki-inline`: rebuilds managed wiki pages and their local DB page/graph projections
 - `generate-brief-inline`: writes `brief.md`, `brief.json`, and `slides.md`
 - `generate-audio-inline`: writes `audio-script.md` and `audio.mp3` when TTS is configured
-- `publish-latest-inline`: rewrites the read-only viewer bundle under `outputs/viewer/`
+- `publish-latest-inline`: rebuilds the installable static PWA shell plus the read-only viewer data bundle under `outputs/viewer/`
 - `sync-vault-inline`: fast-forwards the local vault from GitHub when possible, then commits and pushes local vault changes
 
 ## Pair An iPad
@@ -144,13 +145,25 @@ Open the returned `pairing_url` on the iPad while it is on the same Wi‑Fi as t
 Away from the Mac:
 
 - open the synced vault in Obsidian or Working Copy
-- or open `outputs/viewer/latest/index.html` from Files / Safari
+- or install the GitHub Pages-hosted `outputs/viewer/` site as a PWA on iPhone/iPad
+- or open `outputs/viewer/latest/index.html` from Files / Safari for the plain static fallback
 
 On the same Wi‑Fi:
 
 - open the paired Mac URL
 - trigger ingest, brief regeneration, audio generation, viewer publish, or an explicit vault sync
 - pull the `research-vault` repo on the iPad after the Mac pushes changes
+
+## Hosted Viewer
+
+`outputs/viewer/` is now the deployable static app bundle:
+
+- `index.html`, `assets/*`, `manifest.webmanifest`, `sw.js`, and icons make up the installable PWA shell
+- `app-config.json` points the shell at the co-located published data files
+- `archive.json`, `latest/manifest.json`, and `history/*/manifest.json` are the source of truth for published data
+- `latest/index.html` and `history/*/index.html` remain plain HTML fallbacks for direct file viewing
+
+For pairing to return the device to the public viewer after redeeming a token on the Mac, set `HOSTED_VIEWER_URL` to the GitHub Pages URL that serves `outputs/viewer/`.
 
 ## Tests
 

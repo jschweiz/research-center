@@ -10,6 +10,7 @@ import { ImportantButton } from "../../components/ImportantButton";
 import { ItemCard } from "../../components/ItemCard";
 import { SkimmableText } from "../../components/SkimmableText";
 import type { AppShellOutletContext } from "../../layout/AppShell";
+import { resolveExternalUrl } from "../../lib/external-links";
 
 const contentTypeLabel: Record<DigestEntry["item"]["content_type"], string> = {
   article: "Article",
@@ -235,49 +236,53 @@ function Headlines({ items }: { items: DigestEntry[] }) {
       </div>
 
       <div className="mt-6 overflow-hidden rounded-[1.75rem] border border-[var(--ink)]/8 bg-[rgba(255,255,255,0.48)]">
-        {visibleItems.map((entry, index) => (
-          <article
-            key={entry.item.id}
-            className="group grid gap-3 border-b border-[var(--ink)]/8 px-5 py-4 transition last:border-b-0 hover:bg-[rgba(255,255,255,0.36)] focus-within:bg-[rgba(255,255,255,0.36)] md:grid-cols-[minmax(0,3fr)_minmax(220px,1fr)] md:items-start md:gap-6 md:px-6"
-          >
-            <a className="min-w-0" href={entry.item.canonical_url} rel="noreferrer" target="_blank">
-              <div className="flex items-start gap-4">
-                <span className="mt-0.5 font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
-                  {String(index + 1).padStart(2, "0")}
-                </span>
-                <div className="min-w-0">
-                  <h4 className="text-lg font-semibold leading-7 text-[var(--ink)] transition group-hover:text-[var(--accent)]">
-                    {entry.item.title}
-                  </h4>
-                  <SkimmableText className="mt-2 max-w-none text-sm leading-6 text-[var(--muted-strong)]">
-                    {getHeadlineSummary(entry)}
-                  </SkimmableText>
+        {visibleItems.map((entry, index) => {
+          const canonicalUrl = resolveExternalUrl(entry.item.canonical_url);
+
+          return (
+            <article
+              key={entry.item.id}
+              className="group grid gap-3 border-b border-[var(--ink)]/8 px-5 py-4 transition last:border-b-0 hover:bg-[rgba(255,255,255,0.36)] focus-within:bg-[rgba(255,255,255,0.36)] md:grid-cols-[minmax(0,3fr)_minmax(220px,1fr)] md:items-start md:gap-6 md:px-6"
+            >
+              <a className="min-w-0" href={canonicalUrl} rel="noreferrer" target="_blank">
+                <div className="flex items-start gap-4">
+                  <span className="mt-0.5 font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
+                    {String(index + 1).padStart(2, "0")}
+                  </span>
+                  <div className="min-w-0">
+                    <h4 className="text-lg font-semibold leading-7 text-[var(--ink)] transition group-hover:text-[var(--accent)]">
+                      {entry.item.title}
+                    </h4>
+                    <SkimmableText className="mt-2 max-w-none text-sm leading-6 text-[var(--muted-strong)]">
+                      {getHeadlineSummary(entry)}
+                    </SkimmableText>
+                  </div>
+                </div>
+              </a>
+
+              <div className="flex items-center justify-between gap-4 border-t border-[var(--ink)]/8 pt-3 md:border-t-0 md:pt-0">
+                <div className="text-left md:text-right">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">Origin</p>
+                  <p className="mt-1 text-sm leading-6 text-[var(--ink)]">{getHeadlineOrigin(entry)}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <ImportantButton iconOnly itemId={entry.item.id} starred={entry.item.starred} />
+                  <a
+                    aria-label={`Open source for ${entry.item.title}`}
+                    className="flex h-11 w-11 items-center justify-center rounded-full border border-[var(--ink)]/10 bg-[rgba(255,255,255,0.78)] text-[var(--muted)] transition hover:-translate-y-0.5 hover:border-[var(--accent)]/26 hover:text-[var(--accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/18"
+                    href={canonicalUrl}
+                    rel="noreferrer"
+                    target="_blank"
+                    title="Open source"
+                  >
+                    <ArrowUpRight className="h-4 w-4 shrink-0" />
+                    <span className="sr-only">Open source</span>
+                  </a>
                 </div>
               </div>
-            </a>
-
-            <div className="flex items-center justify-between gap-4 border-t border-[var(--ink)]/8 pt-3 md:border-t-0 md:pt-0">
-              <div className="text-left md:text-right">
-                <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">Origin</p>
-                <p className="mt-1 text-sm leading-6 text-[var(--ink)]">{getHeadlineOrigin(entry)}</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <ImportantButton iconOnly itemId={entry.item.id} starred={entry.item.starred} />
-                <a
-                  aria-label={`Open source for ${entry.item.title}`}
-                  className="flex h-11 w-11 items-center justify-center rounded-full border border-[var(--ink)]/10 bg-[rgba(255,255,255,0.78)] text-[var(--muted)] transition hover:-translate-y-0.5 hover:border-[var(--accent)]/26 hover:text-[var(--accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/18"
-                  href={entry.item.canonical_url}
-                  rel="noreferrer"
-                  target="_blank"
-                  title="Open source"
-                >
-                  <ArrowUpRight className="h-4 w-4 shrink-0" />
-                  <span className="sr-only">Open source</span>
-                </a>
-              </div>
-            </div>
-          </article>
-        ))}
+            </article>
+          );
+        })}
       </div>
     </section>
   );
@@ -386,7 +391,11 @@ function AudioBriefSummaryStrip({ brief }: { brief: Digest }) {
     <div className="space-y-3 border-t border-[var(--ink)]/8 pt-5">
       {audioBrief?.status === "succeeded" ? (
         <>
-          <AudioBriefPlayer audioBrief={audioBrief} briefDate={brief.brief_date ?? ""} />
+          <AudioBriefPlayer
+            audioBrief={audioBrief}
+            audioUrl={api.getAudioSummaryUrl(brief.brief_date ?? "")}
+            briefDate={brief.brief_date ?? ""}
+          />
           {notice ? <p className="text-sm leading-6 text-[var(--danger)]">{notice}</p> : null}
         </>
       ) : (

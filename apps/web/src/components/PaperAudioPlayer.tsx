@@ -5,9 +5,11 @@ type AudioAvailability = "checking" | "ready" | "missing";
 
 export function PaperAudioPlayer({
   audioUrl,
+  onPlay,
   variant = "default",
 }: {
   audioUrl: string;
+  onPlay?: () => void;
   variant?: "default" | "compact";
 }) {
   const [availability, setAvailability] = useState<AudioAvailability>("checking");
@@ -83,7 +85,14 @@ export function PaperAudioPlayer({
             <Headphones className="h-3.5 w-3.5 text-[var(--accent)]" />
             Audio ready
           </div>
-          <audio className="block w-full" controls preload="metadata" src={audioUrl} onError={() => setAvailability("missing")}>
+          <audio
+            className="block w-full"
+            controls
+            onError={() => setAvailability("missing")}
+            onPlay={onPlay}
+            preload="metadata"
+            src={audioUrl}
+          >
             Your browser does not support audio playback.
           </audio>
         </div>
@@ -107,7 +116,14 @@ export function PaperAudioPlayer({
       </div>
       <div className="mt-4 flex items-center gap-3 rounded-2xl border border-[var(--ink)]/8 bg-[rgba(255,255,255,0.56)] px-4 py-4">
         <Headphones className="h-4 w-4 text-[var(--accent)]" />
-        <audio className="min-w-0 flex-1" controls preload="metadata" src={audioUrl} onError={() => setAvailability("missing")}>
+        <audio
+          className="min-w-0 flex-1"
+          controls
+          onError={() => setAvailability("missing")}
+          onPlay={onPlay}
+          preload="metadata"
+          src={audioUrl}
+        >
           Your browser does not support audio playback.
         </audio>
       </div>

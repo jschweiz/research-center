@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Archive, ArrowUpRight } from "lucide-react";
 
 import { api } from "../api/client";
+import { resolveExternalUrl } from "../lib/external-links";
 import { ImportantButton } from "./ImportantButton";
 
 interface QuickActionsProps {
@@ -20,6 +21,7 @@ export function QuickActions({
   triageStatus = "unread",
 }: QuickActionsProps) {
   const queryClient = useQueryClient();
+  const resolvedUrl = resolveExternalUrl(url);
   const refresh = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["briefs"] }),
@@ -54,7 +56,7 @@ export function QuickActions({
           <Archive className={compactActionIconClass} />
           <span className="sr-only">{archiveLabel}</span>
         </button>
-        <a aria-label="Open source" className={compactActionClass} href={url} rel="noreferrer" target="_blank" title="Open source">
+        <a aria-label="Open source" className={compactActionClass} href={resolvedUrl} rel="noreferrer" target="_blank" title="Open source">
           <ArrowUpRight className={compactActionIconClass} />
           <span className="sr-only">Open source</span>
         </a>
@@ -70,7 +72,7 @@ export function QuickActions({
           <Archive className="h-4 w-4" />
           {archiveLabel}
         </button>
-        <a className="secondary-button" href={url} rel="noreferrer" target="_blank">
+        <a className="secondary-button" href={resolvedUrl} rel="noreferrer" target="_blank">
           <ArrowUpRight className="h-4 w-4" />
           Open source
         </a>

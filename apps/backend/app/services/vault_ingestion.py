@@ -1,19 +1,27 @@
 from __future__ import annotations
 
+import json
+import re
 from contextlib import suppress
 from datetime import UTC, datetime
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 from app.core.outbound import UnsafeOutboundUrlError
 from app.db.models import IngestionRunType, RunStatus, ScoreBucket
 from app.integrations.extractors import ContentExtractor
+from app.schemas.items import CapturedPageImportRequest
 from app.schemas.ops import IngestionRunHistoryRead, ItemsIndexStatusRead, OperationBasicInfoRead
-from app.services.profile import DEFAULT_RANKING_THRESHOLDS, DEFAULT_RANKING_WEIGHTS, load_profile_snapshot
+from app.services.profile import (
+    DEFAULT_RANKING_THRESHOLDS,
+    DEFAULT_RANKING_WEIGHTS,
+    load_profile_snapshot,
+)
 from app.services.text import normalize_whitespace
 from app.services.vault_insights import VaultInsightsService
 from app.services.vault_lightweight_enrichment import VaultLightweightEnrichmentService
 from app.services.vault_runtime import (
     RunRecorder,
+    classify_written_kind,
     content_hash,
     document_identity_hash,
     extract_links,
@@ -21,10 +29,31 @@ from app.services.vault_runtime import (
     readable_doc_id,
     utcnow,
 )
-from app.vault.models import ItemsIndex, RawDocument, RawDocumentFrontmatter, VaultItemRecord, VaultItemScore
+from app.vault.models import (
+    SUB_DOCUMENT_TAG,
+    ItemsIndex,
+    RawDocument,
+    RawDocumentFrontmatter,
+    VaultItemRecord,
+    VaultItemScore,
+)
 from app.vault.store import LeaseBusyError, VaultStore
 
 TEXT_SOURCE_SUFFIXES = {".md", ".markdown", ".txt", ".json"}
+MANUAL_IMPORT_SOURCE_ID = "manual-import"
+CAPTURE_METADATA_FILENAME = "capture.json"
+CAPTURED_HTML_FILENAME = "captured.html"
+FETCHED_HTML_FILENAME = "original.html"
+CAPTURED_HTML_MAX_CHARS = 150000
+CAPTURED_TEXT_MAX_CHARS = 60000
+CAPTURED_TEXT_MIN_CHARS = 280
+CAPTURED_TEXT_MIN_WORDS = 40
+MANAGED_IMPORT_ASSET_FILENAMES = {
+    CAPTURE_METADATA_FILENAME,
+    CAPTURED_HTML_FILENAME,
+    FETCHED_HTML_FILENAME,
+}
+AUTHOR_SPLIT_RE = re.compile(r"\s*(?:,|;|\||\band\b|&)\s*", re.IGNORECASE)
 
 
 class VaultIndexService:
@@ -190,6 +219,267 @@ class VaultIndexService:
             summary="Manual URL import completed but the new item was not indexed.",
         )
         raise RuntimeError("Imported URL could not be indexed.")
+
+    def import_captured_page(
+        self,
+        payload: CapturedPageImportRequest | dict[str, object],
+    ) -> VaultItemRecord:
+        request = (
+            payload
+            if isinstance(payload, CapturedPageImportRequest)
+            else CapturedPageImportRequest.model_validate(payload)
+        )
+        run = self.runs.start(
+            run_type=IngestionRunType.INGEST,
+            operation_kind="raw_capture",
+            trigger="manual_capture_import",
+            title="Captured page import",
+            summary="Saving a browser-captured page into the vault.",
+        )
+        now = utcnow()
+        page_url = self._normalize_manual_url(str(request.url))
+        canonical_hint = str(request.canonical_url) if request.canonical_url is not None else None
+        canonical_url = self._resolve_captured_canonical_url(
+            page_url=page_url,
+            canonical_hint=canonical_hint,
+        )
+        existing = self.store.find_raw_document(
+            source_id=MANUAL_IMPORT_SOURCE_ID,
+            external_key=canonical_url,
+        )
+        existing_frontmatter = existing.frontmatter if existing is not None else None
+
+        page_title = self._normalize_optional_string(request.page_title, limit=500)
+        site_name = self._normalize_optional_string(request.site_name, limit=120)
+        description = self._normalize_optional_string(request.description, limit=500)
+        byline = self._normalize_optional_string(request.byline, limit=160)
+        language = self._normalize_optional_string(request.language, limit=32)
+        extraction_mode = (
+            self._normalize_optional_string(request.extraction_mode, limit=48) or "capture"
+        )
+        author_hints = self._parse_capture_authors(request.author_hints, byline=byline)
+
+        captured_text = self._normalize_captured_text(request.content_text)
+        captured_html = self._normalize_html_asset(request.article_html)
+        fetched = None
+        fetched_html: str | None = None
+        fetch_error: str | None = None
+
+        body_source = "captured_text" if self._has_usable_captured_text(captured_text) else None
+        if body_source is None:
+            try:
+                fetched = self.extractor.extract_from_url(page_url)
+                fetched_text = self._normalize_captured_text(fetched.cleaned_text)
+                if self._has_usable_captured_text(fetched_text):
+                    captured_text = fetched_text
+                    body_source = "server_fetch"
+                    extraction_mode = "server-fetch"
+                raw_html = fetched.raw_payload.get("html") if isinstance(fetched.raw_payload, dict) else None
+                fetched_html = self._normalize_html_asset(raw_html)
+            except UnsafeOutboundUrlError as exc:
+                fetch_error = str(exc)
+            except Exception as exc:
+                fetch_error = str(exc)
+
+        if body_source is None and existing is not None:
+            body_source = "existing_document"
+
+        if body_source is None:
+            body_source = "placeholder"
+
+        title = self._resolve_captured_page_title(
+            page_title=page_title,
+            fetched_title=fetched.title if fetched is not None else None,
+            existing_title=existing_frontmatter.title if existing_frontmatter is not None else None,
+            canonical_url=canonical_url,
+        )
+        published_at = self._resolve_captured_page_published_at(
+            captured_published_at=request.published_at,
+            fetched_published_at=fetched.published_at if fetched is not None else None,
+            existing_published_at=(
+                existing_frontmatter.published_at if existing_frontmatter is not None else None
+            ),
+        )
+        source_name = self._resolve_captured_page_source_name(
+            site_name=site_name,
+            canonical_url=canonical_url,
+            existing_source_name=(
+                existing_frontmatter.source_name if existing_frontmatter is not None else None
+            ),
+        )
+        kind = (
+            existing_frontmatter.kind
+            if existing_frontmatter is not None
+            else classify_written_kind(
+                source_url=canonical_url,
+                title=title,
+                source_name=source_name,
+                source_id=MANUAL_IMPORT_SOURCE_ID,
+                default_kind="article",
+            )
+        )
+        merged_authors = self._merge_unique_strings(
+            existing_frontmatter.authors if existing_frontmatter is not None else [],
+            author_hints,
+            limit=6,
+        )
+        short_summary = (
+            existing_frontmatter.short_summary
+            if existing_frontmatter is not None and existing_frontmatter.short_summary
+            else description
+        )
+        tags = list(existing_frontmatter.tags) if existing_frontmatter is not None else []
+
+        if body_source == "existing_document" and existing is not None:
+            body = existing.body
+        else:
+            body_text = (
+                captured_text
+                if body_source != "placeholder"
+                else self._placeholder_import_text(canonical_url)
+            )
+            body = self._render_captured_source_body(title=title, text=body_text)
+
+        asset_payloads = self._build_capture_asset_payloads(
+            request=request,
+            canonical_url=canonical_url,
+            body_source=body_source,
+            fetch_error=fetch_error,
+            captured_html=captured_html,
+            fetched_html=fetched_html,
+            saved_title=title,
+            language=language,
+            extraction_mode=extraction_mode,
+        )
+        retained_assets = (
+            [
+                asset_path
+                for asset_path in existing_frontmatter.asset_paths
+                if asset_path not in MANAGED_IMPORT_ASSET_FILENAMES
+            ]
+            if existing_frontmatter is not None
+            else []
+        )
+        asset_paths = sorted([*retained_assets, *asset_payloads.keys()])
+        doc_id = (
+            existing_frontmatter.id
+            if existing_frontmatter is not None
+            else readable_doc_id(
+                stable_key=canonical_url,
+                title=title,
+                source_slug=MANUAL_IMPORT_SOURCE_ID,
+                published_at=published_at,
+            )
+        )
+        frontmatter = RawDocumentFrontmatter(
+            id=doc_id,
+            kind=kind,
+            title=title,
+            source_url=canonical_url,
+            source_name=source_name,
+            authors=merged_authors,
+            published_at=published_at,
+            ingested_at=existing_frontmatter.ingested_at if existing_frontmatter is not None else now,
+            content_hash=content_hash(title, body),
+            identity_hash=document_identity_hash(
+                source_id=MANUAL_IMPORT_SOURCE_ID,
+                external_key=canonical_url,
+                canonical_url=canonical_url,
+                fallback_key=title,
+            ),
+            tags=tags,
+            status=existing_frontmatter.status if existing_frontmatter is not None else "active",
+            asset_paths=asset_paths,
+            source_id=MANUAL_IMPORT_SOURCE_ID,
+            source_pipeline_id=MANUAL_IMPORT_SOURCE_ID,
+            external_key=canonical_url,
+            canonical_url=canonical_url,
+            doc_role=existing_frontmatter.doc_role if existing_frontmatter is not None else "primary",
+            parent_id=existing_frontmatter.parent_id if existing_frontmatter is not None else None,
+            index_visibility=(
+                existing_frontmatter.index_visibility
+                if existing_frontmatter is not None
+                else "visible"
+            ),
+            fetched_at=now,
+            short_summary=short_summary,
+            lightweight_enrichment_status=(
+                existing_frontmatter.lightweight_enrichment_status
+                if existing_frontmatter is not None
+                else "pending"
+            ),
+            lightweight_enriched_at=(
+                existing_frontmatter.lightweight_enriched_at
+                if existing_frontmatter is not None
+                else None
+            ),
+            lightweight_enrichment_model=(
+                existing_frontmatter.lightweight_enrichment_model
+                if existing_frontmatter is not None
+                else None
+            ),
+            lightweight_enrichment_input_hash=(
+                existing_frontmatter.lightweight_enrichment_input_hash
+                if existing_frontmatter is not None
+                else None
+            ),
+            lightweight_enrichment_error=(
+                existing_frontmatter.lightweight_enrichment_error
+                if existing_frontmatter is not None
+                else None
+            ),
+            lightweight_scoring_model=(
+                existing_frontmatter.lightweight_scoring_model
+                if existing_frontmatter is not None
+                else None
+            ),
+            lightweight_scoring_input_hash=(
+                existing_frontmatter.lightweight_scoring_input_hash
+                if existing_frontmatter is not None
+                else None
+            ),
+            lightweight_score=(
+                existing_frontmatter.lightweight_score
+                if existing_frontmatter is not None
+                else None
+            ),
+        )
+        doc_path = self.store.write_raw_document(
+            kind=frontmatter.kind,
+            doc_id=frontmatter.id,
+            frontmatter=frontmatter,
+            body=body,
+        )
+        self._sync_managed_import_assets(doc_path.parent, asset_payloads)
+
+        with suppress(Exception):
+            VaultLightweightEnrichmentService().enrich_stale_documents(
+                trigger="manual_capture_import",
+                doc_id=frontmatter.id,
+            )
+
+        index = self.rebuild_items_index(trigger="manual_capture_import")
+        for item in index.items:
+            if item.id == frontmatter.id:
+                run.basic_info.extend(
+                    [
+                        OperationBasicInfoRead(label="Document", value=item.title),
+                        OperationBasicInfoRead(label="Body source", value=body_source),
+                        OperationBasicInfoRead(label="Canonical URL", value=canonical_url),
+                    ]
+                )
+                self.runs.finish(
+                    run,
+                    status=RunStatus.SUCCEEDED,
+                    summary=f"Imported {item.title} from the browser capture.",
+                )
+                return item
+        self.runs.finish(
+            run,
+            status=RunStatus.FAILED,
+            summary="Captured page import completed but the document was not indexed.",
+        )
+        raise RuntimeError("Captured page import could not be indexed.")
 
     def items_index_status(
         self,
@@ -400,6 +690,11 @@ class VaultIndexService:
     ) -> VaultItemRecord:
         relative_path = path
         canonical = frontmatter.canonical_url or frontmatter.source_url or relative_path
+        tags = self._merge_unique_strings(
+            frontmatter.tags,
+            [SUB_DOCUMENT_TAG] if frontmatter.doc_role == "derived" else [],
+            limit=max(len(frontmatter.tags) + 1, 1),
+        )
         return VaultItemRecord(
             id=frontmatter.id,
             kind=frontmatter.kind,
@@ -416,7 +711,7 @@ class VaultIndexService:
             extraction_confidence=0.0,
             cleaned_text=body,
             outbound_links=extract_links(body),
-            tags=frontmatter.tags,
+            tags=tags,
             status=frontmatter.status,
             asset_paths=frontmatter.asset_paths,
             content_hash=frontmatter.content_hash,
@@ -493,31 +788,53 @@ class VaultIndexService:
             )
             heuristic_author_match_score = self._clamp_unit_score(min(author_match_count * 0.5, 1.0))
             heuristic_source_score = self._clamp_unit_score(
-                1.0 if source_match else (0.55 if not favorite_sources else 0.35)
+                1.0
+                if source_match
+                else (
+                    0.42 if not favorite_sources and item.kind == "paper" else 0.24
+                )
             )
             judge = item.lightweight_score
             judge_model = item.lightweight_scoring_model or ""
             judge_is_model_based = judge is not None and not str(judge_model).startswith("heuristic:")
-            relevance_score = self._clamp_unit_score(
-                judge.relevance_score
-                if judge is not None
-                else (
+            if judge is None:
+                relevance_score = self._clamp_unit_score(
                     heuristic_topic_match_score * 0.5
                     + heuristic_author_match_score * 0.2
                     + heuristic_source_score * 0.15
                     + 0.15
                 )
-            )
+                source_quality_score = heuristic_source_score
+                author_match_score = heuristic_author_match_score
+                topic_match_score = heuristic_topic_match_score
+            elif judge_is_model_based:
+                source_quality_score = self._blend_model_fit_score(
+                    judge_score=judge.source_fit_score,
+                    heuristic_score=heuristic_source_score,
+                    confidence=judge.confidence_score,
+                )
+                author_match_score = self._blend_model_fit_score(
+                    judge_score=judge.author_fit_score,
+                    heuristic_score=heuristic_author_match_score,
+                    confidence=judge.confidence_score,
+                )
+                topic_match_score = self._blend_model_fit_score(
+                    judge_score=judge.topic_fit_score,
+                    heuristic_score=heuristic_topic_match_score,
+                    confidence=judge.confidence_score,
+                )
+                relevance_score = self._clamp_unit_score(
+                    judge.relevance_score * 0.84
+                    + judge.evidence_fit_score * 0.1
+                    + judge.confidence_score * 0.04
+                    + topic_match_score * 0.02
+                )
+            else:
+                relevance_score = self._clamp_unit_score(judge.relevance_score)
+                source_quality_score = self._clamp_unit_score(judge.source_fit_score)
+                author_match_score = self._clamp_unit_score(judge.author_fit_score)
+                topic_match_score = self._clamp_unit_score(judge.topic_fit_score)
             novelty_score = self._clamp_unit_score(item.novelty_score * 0.65 + item.trend_score * 0.35)
-            source_quality_score = self._clamp_unit_score(
-                max(judge.source_fit_score, heuristic_source_score) if judge is not None else heuristic_source_score
-            )
-            author_match_score = self._clamp_unit_score(
-                max(judge.author_fit_score, heuristic_author_match_score) if judge is not None else heuristic_author_match_score
-            )
-            topic_match_score = self._clamp_unit_score(
-                max(judge.topic_fit_score, heuristic_topic_match_score) if judge is not None else heuristic_topic_match_score
-            )
             zotero_affinity_score = 0.0
             total = (
                 relevance_score * float(weights["relevance"])
@@ -529,6 +846,32 @@ class VaultIndexService:
                 - min(ignored_penalty * 0.15, 0.45)
             )
             total = round(max(0.0, min(total, 1.0)), 4)
+            judge_bucket_cap_applied: str | None = None
+            judge_bucket_floor_applied: str | None = None
+            if judge is not None and judge_is_model_based and judge.confidence_score >= 0.58:
+                worth_a_skim_floor = float(thresholds["worth_a_skim_min"])
+                worth_a_skim_cap = max(float(thresholds["worth_a_skim_min"]) - 0.01, 0.0)
+                must_read_floor = float(thresholds["must_read_min"])
+                must_read_cap = max(float(thresholds["must_read_min"]) - 0.01, 0.0)
+                if judge.bucket_hint == ScoreBucket.ARCHIVE:
+                    capped_total = min(total, worth_a_skim_cap)
+                    if capped_total != total:
+                        judge_bucket_cap_applied = judge.bucket_hint.value
+                    total = capped_total
+                elif judge.bucket_hint == ScoreBucket.WORTH_A_SKIM:
+                    floored_total = max(total, worth_a_skim_floor)
+                    if floored_total != total:
+                        judge_bucket_floor_applied = judge.bucket_hint.value
+                    total = floored_total
+                    capped_total = min(total, must_read_cap)
+                    if capped_total != total:
+                        judge_bucket_cap_applied = judge.bucket_hint.value
+                    total = capped_total
+                elif judge.bucket_hint == ScoreBucket.MUST_READ:
+                    floored_total = max(total, must_read_floor)
+                    if floored_total != total:
+                        judge_bucket_floor_applied = judge.bucket_hint.value
+                    total = floored_total
             bucket = ScoreBucket.ARCHIVE
             if total >= float(thresholds["must_read_min"]):
                 bucket = ScoreBucket.MUST_READ
@@ -559,6 +902,10 @@ class VaultIndexService:
                     "judge_model": judge_model,
                     "judge_evidence_quotes": list(judge.evidence_quotes),
                 }
+                if judge_bucket_cap_applied is not None:
+                    reason_trace["judge_bucket_cap_applied"] = judge_bucket_cap_applied
+                if judge_bucket_floor_applied is not None:
+                    reason_trace["judge_bucket_floor_applied"] = judge_bucket_floor_applied
 
             scored_items.append(
                 item.model_copy(
@@ -588,6 +935,19 @@ class VaultIndexService:
     def _clamp_unit_score(value: float) -> float:
         return round(min(max(value, 0.0), 1.0), 4)
 
+    @classmethod
+    def _blend_model_fit_score(
+        cls,
+        *,
+        judge_score: float,
+        heuristic_score: float,
+        confidence: float,
+    ) -> float:
+        model_weight = min(max(0.65 + confidence * 0.25, 0.0), 0.9)
+        return cls._clamp_unit_score(
+            judge_score * model_weight + heuristic_score * (1.0 - model_weight)
+        )
+
     @staticmethod
     def _counts_by_kind(items: list[VaultItemRecord]) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -602,6 +962,251 @@ class VaultIndexService:
         host = parsed.netloc.lower()
         path = parsed.path or "/"
         return f"{scheme}://{host}{path}"
+
+    @staticmethod
+    def _normalize_optional_string(value: object, *, limit: int | None = None) -> str | None:
+        if value is None:
+            return None
+        cleaned = normalize_whitespace(str(value or ""))
+        if not cleaned:
+            return None
+        if limit is not None:
+            cleaned = cleaned[:limit].strip()
+        return cleaned or None
+
+    def _normalize_captured_text(self, value: object) -> str | None:
+        if value is None:
+            return None
+        lines: list[str] = []
+        previous_blank = False
+        for raw_line in str(value).replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            cleaned = re.sub(r"[ \t]+", " ", raw_line).strip()
+            if not cleaned:
+                if lines and not previous_blank:
+                    lines.append("")
+                previous_blank = True
+                continue
+            lines.append(cleaned)
+            previous_blank = False
+        normalized = "\n".join(lines).strip()
+        if not normalized:
+            return None
+        if len(normalized) > CAPTURED_TEXT_MAX_CHARS:
+            normalized = normalized[:CAPTURED_TEXT_MAX_CHARS].rsplit(" ", 1)[0].strip()
+        return normalized or None
+
+    def _normalize_html_asset(self, value: object) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if not normalized or len(normalized) > CAPTURED_HTML_MAX_CHARS:
+            return None
+        return normalized
+
+    @staticmethod
+    def _has_usable_captured_text(text: str | None) -> bool:
+        if not text:
+            return False
+        if len(text) >= CAPTURED_TEXT_MIN_CHARS:
+            return True
+        return len(text.split()) >= CAPTURED_TEXT_MIN_WORDS
+
+    def _resolve_captured_canonical_url(
+        self,
+        *,
+        page_url: str,
+        canonical_hint: str | None,
+    ) -> str:
+        if canonical_hint is None:
+            return page_url
+        normalized_hint = self._normalize_manual_url(canonical_hint)
+        if self._origin_tuple(normalized_hint) == self._origin_tuple(page_url):
+            return normalized_hint
+        return page_url
+
+    @staticmethod
+    def _origin_tuple(url: str) -> tuple[str, str, int]:
+        parsed = urlsplit(url)
+        scheme = parsed.scheme.lower()
+        hostname = (parsed.hostname or "").lower()
+        port = parsed.port or (443 if scheme == "https" else 80)
+        return scheme, hostname, port
+
+    def _resolve_captured_page_title(
+        self,
+        *,
+        page_title: str | None,
+        fetched_title: str | None,
+        existing_title: str | None,
+        canonical_url: str,
+    ) -> str:
+        for candidate in (page_title, fetched_title, existing_title):
+            normalized = self.extractor.normalize_title(
+                self._normalize_optional_string(candidate) or "",
+                url=canonical_url,
+            )
+            if normalized:
+                return normalized[:500]
+        slug = urlparse(canonical_url).path.rstrip("/").split("/")[-1]
+        fallback = slug.replace("-", " ").replace("_", " ").strip().title() or canonical_url
+        return fallback[:500]
+
+    def _resolve_captured_page_source_name(
+        self,
+        *,
+        site_name: str | None,
+        canonical_url: str,
+        existing_source_name: str | None,
+    ) -> str:
+        for candidate in (site_name, existing_source_name):
+            normalized = self._normalize_optional_string(candidate, limit=120)
+            if normalized:
+                return normalized
+        hostname = (urlparse(canonical_url).hostname or "web").replace("www.", "")
+        return hostname[:120]
+
+    @staticmethod
+    def _resolve_captured_page_published_at(
+        *,
+        captured_published_at: datetime | None,
+        fetched_published_at: datetime | None,
+        existing_published_at: datetime | None,
+    ) -> datetime | None:
+        return captured_published_at or fetched_published_at or existing_published_at
+
+    def _parse_capture_authors(
+        self,
+        author_hints: list[str],
+        *,
+        byline: str | None,
+    ) -> list[str]:
+        raw_values = list(author_hints)
+        if byline:
+            raw_values.append(byline)
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw_value in raw_values:
+            cleaned_value = self._normalize_optional_string(raw_value, limit=160)
+            if not cleaned_value:
+                continue
+            cleaned_value = re.sub(r"^by\s+", "", cleaned_value, flags=re.IGNORECASE).strip()
+            for part in AUTHOR_SPLIT_RE.split(cleaned_value):
+                candidate = self._normalize_optional_string(part, limit=80)
+                if not candidate:
+                    continue
+                lowered = candidate.casefold()
+                if (
+                    lowered in {"staff", "team", "editorial team", "authors"}
+                    or lowered.startswith("http")
+                    or "@" in candidate
+                    or len(candidate.split()) > 8
+                ):
+                    continue
+                if lowered in seen:
+                    continue
+                seen.add(lowered)
+                normalized.append(candidate)
+                if len(normalized) >= 6:
+                    return normalized
+        return normalized
+
+    @staticmethod
+    def _merge_unique_strings(
+        primary: list[str],
+        secondary: list[str],
+        *,
+        limit: int,
+    ) -> list[str]:
+        merged: list[str] = []
+        seen: set[str] = set()
+        for value in [*primary, *secondary]:
+            cleaned = normalize_whitespace(str(value or ""))
+            if not cleaned:
+                continue
+            lowered = cleaned.casefold()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            merged.append(cleaned)
+            if len(merged) >= limit:
+                break
+        return merged
+
+    def _render_captured_source_body(self, *, title: str, text: str) -> str:
+        cleaned_text = text.strip()
+        lines = cleaned_text.splitlines()
+        if lines:
+            first_line = lines[0].lstrip("#").strip()
+            if normalize_whitespace(first_line).casefold() == normalize_whitespace(title).casefold():
+                cleaned_text = "\n".join(lines[1:]).strip()
+        return f"# {title}\n\n{cleaned_text}".strip() + "\n"
+
+    @staticmethod
+    def _placeholder_import_text(canonical_url: str) -> str:
+        return (
+            f"Manual import could not extract the full text for {canonical_url}. "
+            "Open the source link to review the original content."
+        )
+
+    def _build_capture_asset_payloads(
+        self,
+        *,
+        request: CapturedPageImportRequest,
+        canonical_url: str,
+        body_source: str,
+        fetch_error: str | None,
+        captured_html: str | None,
+        fetched_html: str | None,
+        saved_title: str,
+        language: str | None,
+        extraction_mode: str,
+    ) -> dict[str, str]:
+        payload = {
+            "url": str(request.url),
+            "canonical_url_hint": str(request.canonical_url) if request.canonical_url else None,
+            "resolved_canonical_url": canonical_url,
+            "page_title": request.page_title,
+            "site_name": request.site_name,
+            "description": request.description,
+            "published_at": (
+                request.published_at.astimezone(UTC).isoformat(timespec="seconds")
+                if request.published_at is not None
+                else None
+            ),
+            "author_hints": list(request.author_hints),
+            "byline": request.byline,
+            "language": language,
+            "extraction_mode": extraction_mode,
+            "body_source": body_source,
+            "fetch_error": fetch_error,
+            "saved_title": saved_title,
+            "content_text_chars": len(request.content_text or ""),
+            "article_html_chars": len(request.article_html or ""),
+            "captured_html_saved": bool(captured_html),
+            "fetched_html_saved": bool(fetched_html),
+        }
+        assets = {
+            CAPTURE_METADATA_FILENAME: json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+        }
+        if captured_html:
+            assets[CAPTURED_HTML_FILENAME] = captured_html
+        if fetched_html:
+            assets[FETCHED_HTML_FILENAME] = fetched_html
+        return assets
+
+    def _sync_managed_import_assets(
+        self,
+        folder,
+        assets: dict[str, str],
+    ) -> None:
+        for filename in MANAGED_IMPORT_ASSET_FILENAMES:
+            if filename in assets:
+                self.store.write_text(folder / filename, assets[filename])
+                continue
+            path = folder / filename
+            if path.exists():
+                path.unlink()
+
 
 
 VaultIngestionService = VaultIndexService

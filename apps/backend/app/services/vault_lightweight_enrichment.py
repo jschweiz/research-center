@@ -6,7 +6,7 @@ import re
 import unicodedata
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
+from typing import Any, Literal
 
 from app.core.logging import bind_log_context, reset_log_context
 from app.db.models import IngestionRunType, RunStatus
@@ -28,6 +28,271 @@ LIGHTWEIGHT_ENRICHMENT_LEASE_TTL_SECONDS = 900
 ALPHAXIV_SOURCE_ID = "alphaxiv-paper"
 ALPHAXIV_METADATA_FILENAME = "alphaxiv-metadata.json"
 ALPHAXIV_METRIC_MODEL_SUFFIX = "alphaxiv-metrics-v1"
+FRONTIER_LLM_CONTEXT_KEYWORDS = (
+    "llm",
+    "llms",
+    "language model",
+    "language models",
+    "large language model",
+    "large language models",
+    "frontier model",
+    "frontier models",
+    "foundation model",
+    "foundation models",
+    "reasoning model",
+    "reasoning models",
+    "code model",
+    "code models",
+    "transformer",
+    "transformers",
+)
+FRONTIER_LLM_PRIORITY_REFERENCE_WEIGHT = 2.2
+LightweightEnrichmentPhase = Literal["all", "metadata", "scoring"]
+FRONTIER_LLM_PRIORITY_RUBRIC: tuple[dict[str, object], ...] = (
+    {
+        "label": "post-training techniques",
+        "weight": 1.0,
+        "requires_llm_context": False,
+        "keywords": (
+            "post-training",
+            "post training",
+            "rlhf",
+            "dpo",
+            "orpo",
+            "kto",
+            "grpo",
+            "ppo",
+            "reinforcement fine-tuning",
+            "preference optimization",
+            "preference tuning",
+            "reward model",
+            "reward models",
+            "process reward",
+            "outcome reward",
+            "verifiable reward",
+            "instruction tuning",
+            "self-distillation",
+            "distillation",
+            "rejection sampling",
+            "best-of-n",
+        ),
+        "direct_keywords": (
+            "verifier",
+            "verifiers",
+            "preference data",
+            "policy optimization",
+        ),
+    },
+    {
+        "label": "rl for llms",
+        "weight": 0.95,
+        "requires_llm_context": True,
+        "keywords": (
+            "reinforcement learning",
+            "policy optimization",
+            "policy gradient",
+            "rollout",
+            "trajectory",
+            "credit assignment",
+            "exploration",
+            "verifier reward",
+            "process supervision",
+        ),
+        "direct_keywords": (
+            "rlhf",
+            "rlvr",
+            "grpo",
+            "dpo",
+            "ppo",
+        ),
+    },
+    {
+        "label": "reasoning in llms",
+        "weight": 0.88,
+        "requires_llm_context": True,
+        "keywords": (
+            "reasoning",
+            "deliberation",
+            "self-correction",
+            "verification",
+            "chain-of-thought",
+            "inference-time scaling",
+            "test-time compute",
+            "tree search",
+            "reasoning trace",
+            "reasoning traces",
+        ),
+        "direct_keywords": (
+            "reasoning tokens",
+        ),
+    },
+    {
+        "label": "efficiency techniques",
+        "weight": 0.82,
+        "requires_llm_context": True,
+        "keywords": (
+            "efficiency",
+            "efficient",
+            "latency",
+            "throughput",
+            "inference cost",
+            "training efficiency",
+            "speculative decoding",
+            "kv cache",
+            "context compression",
+            "early exit",
+            "adaptive compute",
+            "sparsity",
+            "quantization",
+            "mixture of experts",
+            "flash attention",
+            "flashattention",
+        ),
+        "direct_keywords": (
+            "test-time training",
+            "compute-optimal",
+        ),
+    },
+    {
+        "label": "memory for llms",
+        "weight": 0.74,
+        "requires_llm_context": True,
+        "keywords": (
+            "memory",
+            "long-term memory",
+            "episodic memory",
+            "working memory",
+            "retrieval memory",
+            "memory editing",
+            "long context",
+            "context window",
+            "state tracking",
+        ),
+        "direct_keywords": (
+            "memory layer",
+            "external memory",
+            "memory module",
+        ),
+    },
+    {
+        "label": "interpretability and explainability",
+        "weight": 0.7,
+        "requires_llm_context": True,
+        "keywords": (
+            "interpretability",
+            "explainability",
+            "mechanistic interpretability",
+            "probing",
+            "activation steering",
+            "feature attribution",
+            "circuit",
+            "circuits",
+        ),
+        "direct_keywords": (
+            "sparse autoencoder",
+            "sparse autoencoders",
+            "dictionary learning for transformers",
+        ),
+    },
+    {
+        "label": "hard benchmarks and evals",
+        "weight": 0.72,
+        "requires_llm_context": True,
+        "benchmark_category": True,
+        "keywords": (
+            "benchmark",
+            "benchmarks",
+            "evaluation",
+            "evaluations",
+            "leaderboard",
+            "leaderboards",
+            "judge model",
+            "eval suite",
+        ),
+        "direct_keywords": (
+            "swe-bench",
+            "livecodebench",
+            "gpqa",
+            "mmlu-pro",
+            "math-500",
+            "humanity's last exam",
+            "simpleqa",
+            "mle-bench",
+            "browsecomp",
+            "aime",
+            "agentharm",
+            "bigcodebench",
+            "codeforces",
+        ),
+    },
+)
+FRONTIER_LLM_DEPRIORITIZED_SIGNALS: tuple[dict[str, object], ...] = (
+    {
+        "label": "organization or fellowship announcement",
+        "penalty": 0.22,
+        "keywords": (
+            "fellowship",
+            "fellowships",
+            "grant program",
+            "residency",
+            "residency program",
+            "fundraising",
+            "acquisition",
+            "acquires",
+            "hiring",
+            "internship",
+        ),
+    },
+    {
+        "label": "product or enterprise marketing",
+        "penalty": 0.18,
+        "keywords": (
+            "customer story",
+            "customer stories",
+            "enterprise ai",
+            "pricing",
+            "pricing plan",
+            "support team",
+            "sales team",
+            "bank customer",
+            "business customer",
+        ),
+    },
+    {
+        "label": "newsletter or roundup framing",
+        "penalty": 0.12,
+        "keywords": (
+            "roundup",
+            "round-up",
+            "daily digest",
+            "weekly digest",
+            "top stories",
+        ),
+    },
+)
+FRONTIER_LLM_SCORING_RUBRIC = {
+    "persona": "AI researcher training large-scale frontier LLMs.",
+    "highest_priority_topics": [
+        "post-training methods for LLMs",
+        "reinforcement learning for LLMs",
+        "reasoning in LLMs",
+        "efficiency techniques for training or inference",
+        "memory for LLMs and agents",
+        "interpretability and explainability for LLMs",
+        "hard benchmarks or evaluation methods that materially affect frontier model development",
+    ],
+    "deprioritize": [
+        "fellowships, grants, organization news, acquisitions, or hiring updates",
+        "generic benchmark roundups or leaderboard churn without technical insight",
+        "product marketing, customer stories, and broad enterprise announcements",
+        "papers outside LLM training, evaluation, reasoning, memory, or efficiency unless the transfer is explicit",
+    ],
+    "alphaxiv_preferences": [
+        "Treat at least 50 X likes or at least 500 recent views as a strong secondary signal.",
+        "Treat 10-49 likes or 200-499 recent views as a modest secondary signal.",
+        "Weak engagement must never outweigh weak technical fit.",
+    ],
+}
 
 
 class LightweightEnrichmentCancelledError(RuntimeError):
@@ -95,6 +360,94 @@ class VaultLightweightEnrichmentService:
     ) -> int:
         return len(
             self.list_pending_documents(
+                source_id=source_id,
+                doc_id=doc_id,
+                documents=documents,
+            )
+        )
+
+    def list_metadata_pending_documents(
+        self,
+        *,
+        source_id: str | None = None,
+        doc_id: str | None = None,
+        documents: list[RawDocument] | None = None,
+    ) -> list[RawDocument]:
+        candidates = self._list_target_documents(
+            source_id=source_id,
+            doc_id=doc_id,
+            documents=documents,
+        )
+        return [
+            document
+            for document in candidates
+            if self._should_refresh_metadata(
+                document,
+                enrichment_input_hash=self._enrichment_input_hash(document),
+            )
+        ]
+
+    def count_metadata_pending_documents(
+        self,
+        *,
+        source_id: str | None = None,
+        doc_id: str | None = None,
+        documents: list[RawDocument] | None = None,
+    ) -> int:
+        return len(
+            self.list_metadata_pending_documents(
+                source_id=source_id,
+                doc_id=doc_id,
+                documents=documents,
+            )
+        )
+
+    def list_scoring_pending_documents(
+        self,
+        *,
+        source_id: str | None = None,
+        doc_id: str | None = None,
+        documents: list[RawDocument] | None = None,
+    ) -> list[RawDocument]:
+        candidates = self._list_target_documents(
+            source_id=source_id,
+            doc_id=doc_id,
+            documents=documents,
+        )
+        profile_context = self._profile_context()
+        source_lookup = self._source_lookup()
+        ready_documents: list[RawDocument] = []
+        for document in candidates:
+            metadata_input_hash = self._enrichment_input_hash(document)
+            if self._should_refresh_metadata(
+                document,
+                enrichment_input_hash=metadata_input_hash,
+            ):
+                continue
+            scoring_input_hash = self._scoring_input_hash(
+                document=document,
+                metadata_payload=self._metadata_payload_from_frontmatter(document.frontmatter),
+                profile_context=profile_context,
+                source_context=self._source_context_for_document(
+                    document, source_lookup=source_lookup
+                ),
+            )
+            if self._should_refresh_scoring(
+                document,
+                scoring_input_hash=scoring_input_hash,
+            ):
+                ready_documents.append(document)
+        return ready_documents
+
+    def count_scoring_pending_documents(
+        self,
+        *,
+        source_id: str | None = None,
+        doc_id: str | None = None,
+        documents: list[RawDocument] | None = None,
+    ) -> int:
+        return len(
+            self.list_scoring_pending_documents(
                 source_id=source_id,
                 doc_id=doc_id,
                 documents=documents,
@@ -302,15 +655,17 @@ class VaultLightweightEnrichmentService:
         trigger: str = "manual_lightweight_enrich",
         source_id: str | None = None,
         doc_id: str | None = None,
+        phase: LightweightEnrichmentPhase = "all",
         force: bool = False,
     ) -> IngestionRunHistoryRead:
         run = self.runs.start(
             run_type=IngestionRunType.INGEST,
             operation_kind="lightweight_enrichment",
             trigger=trigger,
-            title="Lightweight enrichment",
-            summary="Refreshing small per-document metadata with the local Ollama model.",
+            title=self._run_title_for_phase(phase),
+            summary=self._run_initial_summary_for_phase(phase),
         )
+        run.basic_info.append(OperationBasicInfoRead(label="Phase", value=phase))
         run.basic_info.append(
             OperationBasicInfoRead(label="Force refresh", value="yes" if force else "no")
         )
@@ -320,7 +675,12 @@ class VaultLightweightEnrichmentService:
             run.basic_info.append(OperationBasicInfoRead(label="Document filter", value=doc_id))
         self.runs.log(
             run,
-            self._run_start_message(source_id=source_id, doc_id=doc_id, force=force),
+            self._run_start_message(
+                source_id=source_id,
+                doc_id=doc_id,
+                force=force,
+                phase=phase,
+            ),
         )
         lease = None
         step = None
@@ -372,7 +732,11 @@ class VaultLightweightEnrichmentService:
                     self._renew_lightweight_lease(run=run, lease=lease)
                     fm = document.frontmatter
                     metadata_input_hash = self._enrichment_input_hash(document)
-                    metadata_needs_refresh = self._should_refresh_metadata(
+                    metadata_current = not self._should_refresh_metadata(
+                        document,
+                        enrichment_input_hash=metadata_input_hash,
+                    )
+                    metadata_refresh_required = self._should_refresh_metadata(
                         document,
                         force=force,
                         enrichment_input_hash=metadata_input_hash,
@@ -387,17 +751,38 @@ class VaultLightweightEnrichmentService:
                         profile_context=profile_context,
                         source_context=source_context,
                     )
-                    scoring_needs_refresh = self._should_refresh_scoring(
+                    scoring_refresh_required = self._should_refresh_scoring(
                         document,
                         force=force,
                         scoring_input_hash=scoring_input_hash,
                     )
+                    if phase == "metadata":
+                        metadata_needs_refresh = metadata_refresh_required
+                        scoring_needs_refresh = False
+                    elif phase == "scoring":
+                        metadata_needs_refresh = False
+                        scoring_needs_refresh = metadata_current and scoring_refresh_required
+                    else:
+                        metadata_needs_refresh = metadata_refresh_required
+                        scoring_needs_refresh = scoring_refresh_required
                     if not metadata_needs_refresh and not scoring_needs_refresh:
                         skipped_count += 1
+                        if phase == "metadata" and metadata_current and scoring_refresh_required:
+                            skip_message = (
+                                f"Skipped {self._document_ref(fm)} because only score refresh is pending."
+                            )
+                        elif phase == "scoring" and not metadata_current:
+                            skip_message = (
+                                f"Skipped {self._document_ref(fm)} because metadata refresh is still required before scoring."
+                            )
+                        else:
+                            skip_message = (
+                                f"Skipped {self._document_ref(fm)} because lightweight metadata and score are current."
+                            )
                         self.runs.log_step(
                             run,
                             step,
-                            f"Skipped {self._document_ref(fm)} because lightweight metadata and score are current.",
+                            skip_message,
                         )
                         continue
 
@@ -435,13 +820,17 @@ class VaultLightweightEnrichmentService:
                 )
                 self.runs.log(
                     run,
-                    f"Scanned {len(documents)} raw document{'s' if len(documents) != 1 else ''}: "
-                    f"{target_count} queued for refresh and {skipped_count} already current.",
+                    self._scan_summary_message(
+                        phase=phase,
+                        scanned_count=len(documents),
+                        target_count=target_count,
+                        skipped_count=skipped_count,
+                    ),
                 )
                 if not candidates:
                     self.runs.log(
                         run,
-                        "No documents required lightweight metadata or scoring refresh.",
+                        self._no_work_message(phase),
                     )
 
                 self._raise_if_stop_requested(run=run)
@@ -492,7 +881,12 @@ class VaultLightweightEnrichmentService:
                     for candidate in candidates
                     if candidate["metadata_needs_refresh"] and candidate["metadata_payload"] is None
                 ]
-                if metadata_requests:
+                if phase == "scoring" and target_count:
+                    self.runs.log(
+                        run,
+                        "Metadata phase skipped for scoring-only run.",
+                    )
+                elif metadata_requests:
                     self._raise_if_stop_requested(run=run)
                     if not bool((ollama_status or {}).get("available")):
                         message = str(
@@ -589,6 +983,9 @@ class VaultLightweightEnrichmentService:
                     candidate["normalized_authors"] = normalized_authors
                     candidate["normalized_tags"] = normalized_tags
                     candidate["normalized_summary"] = normalized_summary
+                    if phase == "metadata":
+                        candidate["score_payload"] = self._score_payload_from_frontmatter(fm)
+                        continue
                     candidate["scoring_input_hash"] = self._scoring_input_hash(
                         document=document,
                         metadata_payload=metadata_payload,
@@ -608,7 +1005,12 @@ class VaultLightweightEnrichmentService:
                     for candidate in candidates
                     if not candidate.get("metadata_failed") and candidate["scoring_needs_refresh"]
                 ]
-                if scoring_requests:
+                if phase == "metadata" and target_count:
+                    self.runs.log(
+                        run,
+                        "Scoring phase skipped for metadata-only run.",
+                    )
+                elif scoring_requests:
                     self._raise_if_stop_requested(run=run)
                     if not bool((ollama_status or {}).get("available")):
                         message = str(
@@ -715,8 +1117,10 @@ class VaultLightweightEnrichmentService:
                 if target_count:
                     self.runs.log(
                         run,
-                        f"Persisting lightweight enrichment results for {target_count} queued document"
-                        f"{'' if target_count == 1 else 's'}.",
+                        self._persisting_results_message(
+                            phase=phase,
+                            target_count=target_count,
+                        ),
                     )
                 for candidate in candidates:
                     self._raise_if_stop_requested(run=run)
@@ -783,42 +1187,56 @@ class VaultLightweightEnrichmentService:
                             f"{candidate['score_fallback_reason']}",
                             level="warning",
                         )
-                    updated_frontmatter = fm.model_copy(
-                        update={
-                            "authors": candidate["normalized_authors"],
-                            "tags": candidate["normalized_tags"],
-                            "short_summary": candidate["normalized_summary"],
-                            "lightweight_enrichment_status": "succeeded",
-                            "lightweight_enriched_at": utcnow(),
-                            "lightweight_enrichment_model": candidate["metadata_payload"].get(
-                                "model"
-                            )
-                            or fm.lightweight_enrichment_model
-                            or str((ollama_status or {}).get("model") or ""),
-                            "lightweight_enrichment_input_hash": candidate["metadata_input_hash"],
-                            "lightweight_enrichment_error": None,
-                            "lightweight_scoring_model": score_payload.get("model")
-                            or fm.lightweight_scoring_model,
-                            "lightweight_scoring_input_hash": candidate["scoring_input_hash"],
-                            "lightweight_score": LightweightJudgeScore.model_validate(
-                                {
-                                    key: value
-                                    for key, value in score_payload.items()
-                                    if key
-                                    in {
-                                        "relevance_score",
-                                        "source_fit_score",
-                                        "topic_fit_score",
-                                        "author_fit_score",
-                                        "evidence_fit_score",
-                                        "confidence_score",
-                                        "bucket_hint",
-                                        "reason",
-                                        "evidence_quotes",
+                    update_payload: dict[str, Any] = {}
+                    if candidate["metadata_needs_refresh"]:
+                        update_payload.update(
+                            {
+                                "authors": candidate["normalized_authors"],
+                                "tags": candidate["normalized_tags"],
+                                "short_summary": candidate["normalized_summary"],
+                                "lightweight_enrichment_status": "succeeded",
+                                "lightweight_enriched_at": utcnow(),
+                                "lightweight_enrichment_model": candidate[
+                                    "metadata_payload"
+                                ].get("model")
+                                or fm.lightweight_enrichment_model
+                                or str((ollama_status or {}).get("model") or ""),
+                                "lightweight_enrichment_input_hash": candidate[
+                                    "metadata_input_hash"
+                                ],
+                                "lightweight_enrichment_error": None,
+                            }
+                        )
+                    if candidate["scoring_needs_refresh"]:
+                        update_payload.update(
+                            {
+                                "lightweight_scoring_model": score_payload.get("model")
+                                or fm.lightweight_scoring_model,
+                                "lightweight_scoring_input_hash": candidate[
+                                    "scoring_input_hash"
+                                ],
+                                "lightweight_score": LightweightJudgeScore.model_validate(
+                                    {
+                                        key: value
+                                        for key, value in score_payload.items()
+                                        if key
+                                        in {
+                                            "relevance_score",
+                                            "source_fit_score",
+                                            "topic_fit_score",
+                                            "author_fit_score",
+                                            "evidence_fit_score",
+                                            "confidence_score",
+                                            "bucket_hint",
+                                            "reason",
+                                            "evidence_quotes",
+                                        }
                                     }
-                                }
-                            ),
-                        }
+                                ),
+                            }
+                        )
+                    updated_frontmatter = fm.model_copy(
+                        update=update_payload
                     )
                     self.store.write_raw_document(
                         kind=updated_frontmatter.kind,
@@ -839,8 +1257,13 @@ class VaultLightweightEnrichmentService:
                     self.runs.log_step(
                         run,
                         step,
-                        f"Enriched {self._document_ref(fm)} with lightweight metadata and score "
-                        f"{updated_frontmatter.lightweight_score.relevance_score:.2f}.",
+                        self._document_success_message(
+                            phase=phase,
+                            document_label=self._document_ref(fm),
+                            score=updated_frontmatter.lightweight_score.relevance_score
+                            if updated_frontmatter.lightweight_score is not None
+                            else None,
+                        ),
                         level="success",
                     )
                     self._log_document_progress(
@@ -879,22 +1302,23 @@ class VaultLightweightEnrichmentService:
                 )
                 self.runs.log(
                     run,
-                    f"Finished lightweight enrichment processing: updated {updated_count}, "
-                    f"failed {failed_count}, skipped {skipped_count}.",
+                    self._completion_log_message(
+                        phase=phase,
+                        updated_count=updated_count,
+                        failed_count=failed_count,
+                        skipped_count=skipped_count,
+                    ),
                     level="warning" if failed_count else "success",
                 )
-                summary = (
-                    f"Lightweight enrichment updated {updated_count} document"
-                    f"{'' if updated_count == 1 else 's'}."
-                )
-                if failed_count:
-                    summary += f" {failed_count} document{'s' if failed_count != 1 else ''} failed."
-                if skipped_count:
-                    summary += f" {skipped_count} unchanged document{'s' if skipped_count != 1 else ''} were skipped."
                 return self.runs.finish(
                     run,
                     status=RunStatus.SUCCEEDED if failed_count == 0 else RunStatus.FAILED,
-                    summary=summary,
+                    summary=self._completion_summary(
+                        phase=phase,
+                        updated_count=updated_count,
+                        failed_count=failed_count,
+                        skipped_count=skipped_count,
+                    ),
                 )
             except LightweightEnrichmentCancelledError as exc:
                 message = str(exc)
@@ -920,16 +1344,13 @@ class VaultLightweightEnrichmentService:
                     skipped_count=skipped_count,
                     failed_count=failed_count,
                 )
-                summary = "Lightweight enrichment canceled from local-control."
-                if updated_count:
-                    summary = (
-                        f"Lightweight enrichment canceled after updating {updated_count} document"
-                        f"{'' if updated_count == 1 else 's'}."
-                    )
                 return self.runs.finish(
                     run,
                     status=RunStatus.FAILED,
-                    summary=summary,
+                    summary=self._canceled_summary(
+                        phase=phase,
+                        updated_count=updated_count,
+                    ),
                 )
         finally:
             self.store.clear_operation_stop_request(run.id)
@@ -975,20 +1396,178 @@ class VaultLightweightEnrichmentService:
         self._upsert_basic_info(run, label="Failed", value=str(failed_count))
 
     @staticmethod
+    def _run_title_for_phase(phase: LightweightEnrichmentPhase) -> str:
+        if phase == "metadata":
+            return "Metadata enrichment"
+        if phase == "scoring":
+            return "Score generation"
+        return "Lightweight enrichment"
+
+    @staticmethod
+    def _run_initial_summary_for_phase(phase: LightweightEnrichmentPhase) -> str:
+        if phase == "metadata":
+            return "Refreshing tags, authors, and short summaries with the local Ollama model."
+        if phase == "scoring":
+            return "Refreshing lightweight document scores with the local Ollama model."
+        return "Refreshing small per-document metadata and scores with the local Ollama model."
+
+    @staticmethod
     def _run_start_message(
         *,
         source_id: str | None,
         doc_id: str | None,
         force: bool,
+        phase: LightweightEnrichmentPhase,
     ) -> str:
         scope = "all raw documents"
         if doc_id:
             scope = f"document {doc_id}"
         elif source_id:
             scope = f"source {source_id}"
+        phase_label = (
+            "lightweight metadata refresh"
+            if phase == "metadata"
+            else "lightweight score refresh"
+            if phase == "scoring"
+            else "lightweight enrichment"
+        )
         if force:
-            return f"Starting lightweight enrichment for {scope} with force refresh enabled."
-        return f"Starting lightweight enrichment for {scope}."
+            return f"Starting {phase_label} for {scope} with force refresh enabled."
+        return f"Starting {phase_label} for {scope}."
+
+    @staticmethod
+    def _scan_summary_message(
+        *,
+        phase: LightweightEnrichmentPhase,
+        scanned_count: int,
+        target_count: int,
+        skipped_count: int,
+    ) -> str:
+        document_label = f"raw document{'' if scanned_count == 1 else 's'}"
+        if phase == "metadata":
+            return (
+                f"Scanned {scanned_count} {document_label}: {target_count} queued for metadata refresh "
+                f"and {skipped_count} skipped because only scoring was pending or the document was already current."
+            )
+        if phase == "scoring":
+            return (
+                f"Scanned {scanned_count} {document_label}: {target_count} queued for score refresh "
+                f"and {skipped_count} skipped because metadata was still pending or the score was already current."
+            )
+        return (
+            f"Scanned {scanned_count} {document_label}: {target_count} queued for refresh "
+            f"and {skipped_count} already current."
+        )
+
+    @staticmethod
+    def _no_work_message(phase: LightweightEnrichmentPhase) -> str:
+        if phase == "metadata":
+            return "No documents required lightweight metadata refresh."
+        if phase == "scoring":
+            return "No documents were ready for lightweight score refresh."
+        return "No documents required lightweight metadata or scoring refresh."
+
+    @staticmethod
+    def _persisting_results_message(
+        *,
+        phase: LightweightEnrichmentPhase,
+        target_count: int,
+    ) -> str:
+        target_label = f"{target_count} queued document{'' if target_count == 1 else 's'}"
+        if phase == "metadata":
+            return f"Persisting lightweight metadata results for {target_label}."
+        if phase == "scoring":
+            return f"Persisting lightweight scoring results for {target_label}."
+        return f"Persisting lightweight enrichment results for {target_label}."
+
+    @staticmethod
+    def _document_success_message(
+        *,
+        phase: LightweightEnrichmentPhase,
+        document_label: str,
+        score: float | None,
+    ) -> str:
+        if phase == "metadata":
+            return f"Refreshed lightweight metadata for {document_label}."
+        if phase == "scoring":
+            score_label = f" to {score:.2f}" if score is not None else ""
+            return f"Refreshed lightweight score for {document_label}{score_label}."
+        score_label = f"{score:.2f}" if score is not None else "n/a"
+        return f"Enriched {document_label} with lightweight metadata and score {score_label}."
+
+    @staticmethod
+    def _completion_log_message(
+        *,
+        phase: LightweightEnrichmentPhase,
+        updated_count: int,
+        failed_count: int,
+        skipped_count: int,
+    ) -> str:
+        phase_label = (
+            "lightweight metadata"
+            if phase == "metadata"
+            else "lightweight scoring"
+            if phase == "scoring"
+            else "lightweight enrichment"
+        )
+        return (
+            f"Finished {phase_label} processing: updated {updated_count}, "
+            f"failed {failed_count}, skipped {skipped_count}."
+        )
+
+    @staticmethod
+    def _completion_summary(
+        *,
+        phase: LightweightEnrichmentPhase,
+        updated_count: int,
+        failed_count: int,
+        skipped_count: int,
+    ) -> str:
+        phase_label = (
+            "Lightweight metadata refresh"
+            if phase == "metadata"
+            else "Lightweight scoring refresh"
+            if phase == "scoring"
+            else "Lightweight enrichment"
+        )
+        summary = (
+            f"{phase_label} updated {updated_count} document"
+            f"{'' if updated_count == 1 else 's'}."
+        )
+        if failed_count:
+            summary += f" {failed_count} document{'s' if failed_count != 1 else ''} failed."
+        if skipped_count:
+            if phase == "all":
+                summary += (
+                    f" {skipped_count} unchanged document"
+                    f"{'' if skipped_count == 1 else 's'} were skipped."
+                )
+            else:
+                summary += (
+                    f" {skipped_count} other document"
+                    f"{'' if skipped_count == 1 else 's'} were skipped for this phase."
+                )
+        return summary
+
+    @staticmethod
+    def _canceled_summary(
+        *,
+        phase: LightweightEnrichmentPhase,
+        updated_count: int,
+    ) -> str:
+        phase_label = (
+            "Lightweight metadata refresh"
+            if phase == "metadata"
+            else "Lightweight scoring refresh"
+            if phase == "scoring"
+            else "Lightweight enrichment"
+        )
+        if updated_count:
+            return (
+                f"{phase_label} canceled after updating {updated_count} document"
+                f"{'' if updated_count == 1 else 's'}."
+            )
+        return f"{phase_label} canceled from local-control."
 
     @staticmethod
     def _document_ref(frontmatter: RawDocumentFrontmatter) -> str:
@@ -1420,6 +1999,16 @@ class VaultLightweightEnrichmentService:
             "favorite_sources": list(getattr(profile, "favorite_sources", []) or []),
             "ignored_topics": list(getattr(profile, "ignored_topics", []) or []),
             "prompt_guidance": {"enrichment": enrichment_guidance},
+            "scoring_rubric": {
+                "persona": FRONTIER_LLM_SCORING_RUBRIC["persona"],
+                "highest_priority_topics": list(
+                    FRONTIER_LLM_SCORING_RUBRIC["highest_priority_topics"]
+                ),
+                "deprioritize": list(FRONTIER_LLM_SCORING_RUBRIC["deprioritize"]),
+                "alphaxiv_preferences": list(
+                    FRONTIER_LLM_SCORING_RUBRIC["alphaxiv_preferences"]
+                ),
+            },
         }
 
     def _source_context_for_document(
@@ -1502,6 +2091,7 @@ class VaultLightweightEnrichmentService:
         favorite_sources = [
             value.casefold() for value in profile_context.get("favorite_sources") or []
         ]
+        source_type = self._normalize_optional_string(source_context.get("type")) or ""
 
         topic_hits = sum(1 for value in favorite_topics if value and value in text_haystack)
         ignored_hits = sum(1 for value in ignored_topics if value and value in text_haystack)
@@ -1513,16 +2103,37 @@ class VaultLightweightEnrichmentService:
             normalize_whitespace(str(source_context.get("source_id") or "")).casefold(),
         }
         source_match = any(token and token in set(favorite_sources) for token in source_tokens)
+        priority_match_score, priority_labels, benchmark_only = self._frontier_llm_priority_matches(
+            text_haystack
+        )
+        deprioritize_penalty, deprioritize_labels = self._frontier_llm_deprioritization_matches(
+            text_haystack
+        )
 
         topic_fit_score = self._clamp_unit_score(
-            (0.55 if not favorite_topics and not ignored_topics else 0.18 + topic_hits * 0.22)
+            0.05
+            + min(topic_hits * 0.18, 0.36)
+            + priority_match_score * 0.7
             - min(ignored_hits * 0.24, 0.6)
+            - deprioritize_penalty
+            - (0.08 if benchmark_only else 0.0)
         )
         source_fit_score = self._clamp_unit_score(
-            1.0 if source_match else (0.55 if not favorite_sources else 0.35)
+            1.0
+            if source_match
+            else (
+                0.52
+                if document.frontmatter.source_id == ALPHAXIV_SOURCE_ID and priority_match_score >= 0.3
+                else (
+                    0.42
+                    if document.frontmatter.kind == "paper"
+                    or source_type.casefold() in {"paper", "research"}
+                    else 0.24
+                )
+            )
         )
         author_fit_score = self._clamp_unit_score(
-            1.0 if author_hits else (0.5 if not favorite_authors else 0.18)
+            1.0 if author_hits else (0.35 if not favorite_authors else 0.12)
         )
         evidence_fit_score = self._clamp_unit_score(
             0.25
@@ -1530,13 +2141,17 @@ class VaultLightweightEnrichmentService:
             + min(len(normalize_whitespace(document.body)) / 4000.0, 0.25)
             + (0.08 if tags else 0.0)
             + (0.07 if authors else 0.0)
+            - min(deprioritize_penalty * 0.08, 0.08)
         )
         relevance_score = self._clamp_unit_score(
-            topic_fit_score * 0.45
-            + source_fit_score * 0.2
-            + author_fit_score * 0.15
+            topic_fit_score * 0.5
+            + source_fit_score * 0.12
+            + author_fit_score * 0.08
             + evidence_fit_score * 0.2
+            + priority_match_score * 0.1
             - min(ignored_hits * 0.08, 0.2)
+            - min(deprioritize_penalty * 0.25, 0.15)
+            - (0.06 if benchmark_only else 0.0)
         )
         bucket_hint = "archive"
         if relevance_score >= 0.76:
@@ -1544,12 +2159,18 @@ class VaultLightweightEnrichmentService:
         elif relevance_score >= 0.36:
             bucket_hint = "worth_a_skim"
         reasons: list[str] = []
+        if priority_labels:
+            reasons.append(f"rubric matches: {', '.join(priority_labels[:2])}")
         if topic_hits:
             reasons.append(f"{topic_hits} favorite-topic match{'es' if topic_hits != 1 else ''}")
         if source_match:
             reasons.append("favorite-source match")
         if author_hits:
             reasons.append(f"{author_hits} favorite-author match{'es' if author_hits != 1 else ''}")
+        if benchmark_only:
+            reasons.append("benchmark-only signal")
+        if deprioritize_labels:
+            reasons.append(f"deprioritized by {', '.join(deprioritize_labels[:2])}")
         if ignored_hits:
             reasons.append(f"{ignored_hits} ignored-topic hit{'s' if ignored_hits != 1 else ''}")
         if not reasons:
@@ -1565,7 +2186,14 @@ class VaultLightweightEnrichmentService:
             "topic_fit_score": topic_fit_score,
             "author_fit_score": author_fit_score,
             "evidence_fit_score": evidence_fit_score,
-            "confidence_score": 0.45,
+            "confidence_score": self._clamp_unit_score(
+                0.4
+                + min(topic_hits * 0.05, 0.12)
+                + priority_match_score * 0.22
+                + (0.06 if summary else 0.0)
+                + (0.06 if tags else 0.0)
+                - min(deprioritize_penalty * 0.15, 0.12)
+            ),
             "bucket_hint": bucket_hint,
             "reason": f"Heuristic fallback based on {', '.join(reasons)}.",
             "evidence_quotes": evidence_quotes,
@@ -1608,8 +2236,18 @@ class VaultLightweightEnrichmentService:
         if total_weight <= 0:
             return {}
 
-        engagement_score = self._clamp_unit_score(weighted_sum / total_weight)
+        raw_engagement_score = self._clamp_unit_score(weighted_sum / total_weight)
+        engagement_tier, engagement_multiplier = self._alphaxiv_engagement_tier(
+            public_total_votes=public_total_votes,
+            total_votes=total_votes,
+            visits_last_7_days=visits_last_7_days,
+            visits_all=visits_all,
+            x_likes=x_likes,
+        )
+        engagement_score = self._clamp_unit_score(raw_engagement_score * engagement_multiplier)
         summary_bits: list[str] = []
+        if x_likes is not None and x_likes > 0:
+            summary_bits.append(f"{int(x_likes)} X likes")
         if public_total_votes is not None:
             summary_bits.append(f"{int(public_total_votes)} public votes")
         if total_votes is not None:
@@ -1628,7 +2266,9 @@ class VaultLightweightEnrichmentService:
                 "x_likes": x_likes,
                 "citations_count": citations_count,
             },
+            "alphaxiv_raw_engagement_score": raw_engagement_score,
             "alphaxiv_engagement_score": engagement_score,
+            "alphaxiv_engagement_tier": engagement_tier,
             "alphaxiv_engagement_summary": ", ".join(summary_bits[:3]),
         }
 
@@ -1677,30 +2317,35 @@ class VaultLightweightEnrichmentService:
 
         payload = dict(score_payload)
         topic_fit_score = self._coerce_score_value(payload.get("topic_fit_score"))
+        base_relevance_score = self._coerce_score_value(payload.get("relevance_score"))
+        author_fit_score = self._coerce_score_value(payload.get("author_fit_score"))
+        evidence_fit_score = self._coerce_score_value(payload.get("evidence_fit_score"))
+        technical_fit_score = max(
+            topic_fit_score,
+            base_relevance_score,
+            evidence_fit_score * 0.85,
+        )
         source_fit_score = self._clamp_unit_score(
             max(
                 self._coerce_score_value(payload.get("source_fit_score")),
-                0.45 + engagement_score * 0.35,
-            )
-        )
-        author_fit_score = self._coerce_score_value(payload.get("author_fit_score"))
-        evidence_fit_score = self._clamp_unit_score(
-            max(
-                self._coerce_score_value(payload.get("evidence_fit_score")),
-                0.35 + engagement_score * 0.3,
+                0.5 + engagement_score * (0.18 + technical_fit_score * 0.18),
             )
         )
         confidence_score = self._clamp_unit_score(
             max(
                 self._coerce_score_value(payload.get("confidence_score")),
-                0.45 + engagement_score * 0.35,
+                0.4
+                + engagement_score
+                * (
+                    0.15
+                    + max(topic_fit_score, base_relevance_score) * 0.1
+                ),
             )
         )
-        relevance_score = self._clamp_unit_score(
-            self._coerce_score_value(payload.get("relevance_score"))
-            + engagement_score
-            * (0.04 + topic_fit_score * 0.08 + source_fit_score * 0.04)
-        )
+        engagement_bonus = engagement_score * (0.035 + technical_fit_score * 0.13)
+        if technical_fit_score < 0.36:
+            engagement_bonus = min(engagement_bonus, 0.04)
+        relevance_score = self._clamp_unit_score(base_relevance_score + engagement_bonus)
         reason = self._normalize_optional_string(payload.get("reason")) or "Profile-fit judgment."
         engagement_summary = self._normalize_optional_string(
             source_context.get("alphaxiv_engagement_summary")
@@ -1730,6 +2375,92 @@ class VaultLightweightEnrichmentService:
             }
         )
         return payload
+
+    @classmethod
+    def _frontier_llm_priority_matches(cls, haystack: str) -> tuple[float, list[str], bool]:
+        llm_context_hits = cls._keyword_hit_count(haystack, FRONTIER_LLM_CONTEXT_KEYWORDS)
+        matched_weight = 0.0
+        matched_labels: list[str] = []
+        matched_non_benchmark = False
+        matched_benchmark = False
+        for entry in FRONTIER_LLM_PRIORITY_RUBRIC:
+            direct_hits = cls._keyword_hit_count(haystack, entry.get("direct_keywords", ()))
+            keyword_hits = cls._keyword_hit_count(haystack, entry.get("keywords", ()))
+            if direct_hits <= 0 and keyword_hits <= 0:
+                continue
+            if direct_hits > 0:
+                strength = 1.0
+            else:
+                if bool(entry.get("requires_llm_context")) and llm_context_hits <= 0:
+                    continue
+                strength = min(1.0, 0.55 + keyword_hits * 0.15)
+            matched_weight += float(entry.get("weight") or 0.0) * strength
+            matched_labels.append(str(entry.get("label") or ""))
+            if bool(entry.get("benchmark_category")):
+                matched_benchmark = True
+            else:
+                matched_non_benchmark = True
+        priority_score = cls._clamp_unit_score(
+            matched_weight / FRONTIER_LLM_PRIORITY_REFERENCE_WEIGHT
+        )
+        benchmark_only = matched_benchmark and not matched_non_benchmark
+        return priority_score, [label for label in matched_labels if label][:3], benchmark_only
+
+    @classmethod
+    def _frontier_llm_deprioritization_matches(cls, haystack: str) -> tuple[float, list[str]]:
+        penalties = 0.0
+        labels: list[str] = []
+        for entry in FRONTIER_LLM_DEPRIORITIZED_SIGNALS:
+            hits = cls._keyword_hit_count(haystack, entry.get("keywords", ()))
+            if hits <= 0:
+                continue
+            penalties += float(entry.get("penalty") or 0.0)
+            labels.append(str(entry.get("label") or ""))
+        return cls._clamp_unit_score(min(penalties, 0.45)), [label for label in labels if label][:3]
+
+    @classmethod
+    def _alphaxiv_engagement_tier(
+        cls,
+        *,
+        public_total_votes: float | None,
+        total_votes: float | None,
+        visits_last_7_days: float | None,
+        visits_all: float | None,
+        x_likes: float | None,
+    ) -> tuple[str, float]:
+        if (
+            (x_likes or 0.0) >= 100.0
+            or (visits_last_7_days or 0.0) >= 1_500.0
+            or (public_total_votes or 0.0) >= 150.0
+        ):
+            return "exceptional", 1.0
+        if (
+            (x_likes or 0.0) >= 50.0
+            or (visits_last_7_days or 0.0) >= 500.0
+            or (public_total_votes or 0.0) >= 50.0
+            or (total_votes or 0.0) >= 100.0
+        ):
+            return "high", 0.72
+        if (
+            (x_likes or 0.0) >= 10.0
+            or (visits_last_7_days or 0.0) >= 200.0
+            or (visits_all or 0.0) >= 1_000.0
+            or (public_total_votes or 0.0) >= 10.0
+            or (total_votes or 0.0) >= 25.0
+        ):
+            return "notable", 0.38
+        return "low", 0.0
+
+    @staticmethod
+    def _keyword_hit_count(text: str, keywords: object) -> int:
+        if not isinstance(keywords, (list, tuple, set)):
+            return 0
+        lowered = text.casefold()
+        return sum(
+            1
+            for keyword in keywords
+            if isinstance(keyword, str) and keyword and keyword.casefold() in lowered
+        )
 
     @classmethod
     def _coerce_score_value(cls, value: object) -> float:

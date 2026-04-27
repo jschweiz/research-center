@@ -22,7 +22,7 @@ from app.schemas.briefs import (
     PaperTableEntryRead,
 )
 from app.schemas.common import AlphaXivPaperRead
-from app.schemas.items import ItemDetailRead, ItemInsightRead, ItemListEntry, ItemScoreRead
+from app.schemas.items import ItemDetailRead, ItemInsightRead, ItemListEntry, ItemScoreBreakdownRead, ItemScoreRead
 from app.schemas.ops import (
     IngestionRunHistoryRead,
     OperationBasicInfoRead,
@@ -249,6 +249,7 @@ def brief_priority_key(item: VaultItemRecord) -> tuple[float, datetime, str]:
 def to_item_list_entry(
     item: VaultItemRecord,
     *,
+    read: bool = False,
     starred: bool = False,
     summary_override: str | None = None,
 ) -> ItemListEntry:
@@ -269,11 +270,20 @@ def to_item_list_entry(
         canonical_url=item.canonical_url,
         content_type=item.content_type,
         triage_status="archived" if item.status == "archived" else "unread",
+        read=read,
         starred=starred,
         extraction_confidence=item.extraction_confidence,
         short_summary=short_summary,
         bucket=item.score.bucket,
         total_score=item.score.total_score,
+        score_breakdown=ItemScoreBreakdownRead(
+            relevance_score=item.score.relevance_score,
+            novelty_score=item.score.novelty_score,
+            source_quality_score=item.score.source_quality_score,
+            author_match_score=item.score.author_match_score,
+            topic_match_score=item.score.topic_match_score,
+            zotero_affinity_score=item.score.zotero_affinity_score,
+        ),
         reason_trace=dict(item.score.reason_trace),
         also_mentioned_in_count=0,
     )
@@ -282,6 +292,7 @@ def to_item_list_entry(
 def to_item_detail(
     item: VaultItemRecord,
     *,
+    read: bool = False,
     starred: bool = False,
     alphaxiv: AlphaXivPaperRead | None = None,
 ) -> ItemDetailRead:
@@ -304,6 +315,7 @@ def to_item_detail(
         canonical_url=item.canonical_url,
         content_type=item.content_type,
         triage_status="archived" if item.status == "archived" else "unread",
+        read=read,
         starred=starred,
         ingest_status=RunStatus.SUCCEEDED,
         extraction_confidence=item.extraction_confidence,
@@ -410,15 +422,17 @@ def build_digest(
     interesting_side_signals: list[VaultItemRecord],
     remaining_reads: list[VaultItemRecord],
     papers_table: list[VaultItemRecord],
+    read_ids: set[str] | None = None,
     starred_ids: set[str] | None = None,
 ) -> DigestRead:
+    read_ids = read_ids or set()
     starred_ids = starred_ids or set()
     coverage_day = coverage_day_for_edition(brief_date)
 
     def _entry_list(items: list[VaultItemRecord]) -> list[DigestEntryRead]:
         return [
             DigestEntryRead(
-                item=to_item_list_entry(item, starred=item.id in starred_ids),
+                item=to_item_list_entry(item, read=item.id in read_ids, starred=item.id in starred_ids),
                 note=None,
                 rank=index + 1,
             )
@@ -445,7 +459,7 @@ def build_digest(
         remaining_reads=_entry_list(remaining_reads),
         papers_table=[
             PaperTableEntryRead(
-                item=to_item_list_entry(item, starred=item.id in starred_ids),
+                item=to_item_list_entry(item, read=item.id in read_ids, starred=item.id in starred_ids),
                 rank=index + 1,
                 zotero_tags=[],
                 credibility_score=None,
@@ -459,8 +473,10 @@ def hydrate_digest(
     digest: DigestRead,
     *,
     item_lookup: dict[str, VaultItemRecord],
+    read_ids: set[str] | None = None,
     starred_ids: set[str] | None = None,
 ) -> DigestRead:
+    read_ids = read_ids or set()
     starred_ids = starred_ids or set()
 
     def _entry_list(entries: list[DigestEntryRead]) -> list[DigestEntryRead]:
@@ -472,7 +488,7 @@ def hydrate_digest(
             hydrated.append(
                 entry.model_copy(
                     update={
-                        "item": to_item_list_entry(item, starred=item.id in starred_ids),
+                        "item": to_item_list_entry(item, read=item.id in read_ids, starred=item.id in starred_ids),
                     }
                 )
             )
@@ -487,7 +503,7 @@ def hydrate_digest(
             hydrated.append(
                 entry.model_copy(
                     update={
-                        "item": to_item_list_entry(item, starred=item.id in starred_ids),
+                        "item": to_item_list_entry(item, read=item.id in read_ids, starred=item.id in starred_ids),
                     }
                 )
             )

@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.db.models import IngestionRunType, RunStatus
@@ -220,6 +221,79 @@ def test_pipeline_status_reports_stale_items_index_after_raw_change(
     assert payload["items_index"]["up_to_date"] is False
     assert payload["items_index"]["stale_document_count"] == 1
     assert payload["items_index"]["indexed_item_count"] == 1
+
+
+def test_run_source_pipeline_fetches_only_and_leaves_follow_up_steps_manual(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = VaultOperationService()
+    calls: list[tuple[str, object]] = []
+
+    def _fake_prepare_for_mutation() -> None:
+        calls.append(("prepare_for_mutation", None))
+
+    def _fake_sync_source_by_id(
+        source_id: str,
+        *,
+        trigger: str = "manual_source_fetch",
+        max_items: int | None = None,
+        alphaxiv_sort: str | None = None,
+    ) -> IngestionRunHistoryRead:
+        calls.append(
+            (
+                "sync_source_by_id",
+                {
+                    "source_id": source_id,
+                    "trigger": trigger,
+                    "max_items": max_items,
+                    "alphaxiv_sort": alphaxiv_sort,
+                },
+            )
+        )
+        return _build_run(
+            "raw_fetch",
+            "Fetch source",
+            "Fetched raw documents.",
+            run_id="source-run-123",
+        )
+
+    def _fake_push_local_changes(*, message: str) -> None:
+        calls.append(("push_local_changes", message))
+
+    monkeypatch.setattr(service.sync, "prepare_for_mutation", _fake_prepare_for_mutation)
+    monkeypatch.setattr(service.source_ingestion, "sync_source_by_id", _fake_sync_source_by_id)
+    monkeypatch.setattr(
+        service.lightweight,
+        "enrich_stale_documents",
+        lambda *args, **kwargs: pytest.fail("Per-source fetch should not trigger lightweight enrichment automatically."),
+    )
+    monkeypatch.setattr(
+        service.ingestion,
+        "rebuild_items_index",
+        lambda *args, **kwargs: pytest.fail("Per-source fetch should not rebuild the index automatically."),
+    )
+    monkeypatch.setattr(service.sync, "push_local_changes", _fake_push_local_changes)
+
+    run_id = service.run_source_pipeline(
+        source_id="openai-website",
+        max_items=2,
+        alphaxiv_sort="Likes",
+    )
+
+    assert run_id == "source-run-123"
+    assert calls == [
+        ("prepare_for_mutation", None),
+        (
+            "sync_source_by_id",
+            {
+                "source_id": "openai-website",
+                "trigger": "manual_source_fetch",
+                "max_items": 2,
+                "alphaxiv_sort": "Likes",
+            },
+        ),
+        ("push_local_changes", "Fetch source openai-website"),
+    ]
 
 
 def test_staged_worker_pipeline_endpoints_return_job_responses(

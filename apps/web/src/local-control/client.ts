@@ -1,4 +1,15 @@
-import type { BriefAvailability, IngestionRunHistoryEntry, ItemDetail, ItemListEntry, Profile, Source } from "../api/types";
+import type {
+  AlphaXivSort,
+  ActionResponse,
+  BriefAvailability,
+  Digest,
+  IngestionRunHistoryEntry,
+  ItemDetail,
+  ItemListEntry,
+  PaginatedResponse,
+  Profile,
+  Source,
+} from "../api/types";
 import { getConfiguredApiUrl } from "../api/client";
 import { getStoredLocalControlToken } from "../runtime/storage";
 import type {
@@ -89,17 +100,37 @@ export const localControlClient = {
     from?: string;
     to?: string;
     sort?: string;
+    page?: number;
+    page_size?: number;
+    hide_sub_documents?: boolean;
   }) => {
     const search = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => {
-      if (value) search.set(key, value);
+      if (value === undefined || value === null || value === "") return;
+      search.set(key, String(value));
     });
     const suffix = search.toString() ? `?${search.toString()}` : "";
-    return request<ItemListEntry[]>(`/documents${suffix}`);
+    return request<PaginatedResponse<ItemListEntry>>(`/documents${suffix}`);
   },
   getDocument: (id: string) => request<ItemDetail>(`/documents/${id}`),
+  markDocumentRead: (id: string) => request<ActionResponse>(`/documents/${id}/read`, { method: "POST" }),
+  starDocument: (id: string) => request<ActionResponse>(`/documents/${id}/star`, { method: "POST" }),
+  saveDocumentToZotero: (id: string, payload?: { tags?: string[]; note_prefix?: string | null }) =>
+    request<ActionResponse>(`/documents/${id}/save-to-zotero`, {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
+  importUrlWithSummary: (url: string) =>
+    request<ItemDetail>("/documents/import-url-with-summary", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
   getSources: () => request<Source[]>("/sources"),
   getBriefAvailability: () => request<BriefAvailability>("/briefs/availability"),
+  getTodayBrief: () => request<Digest>("/briefs/today"),
+  getBrief: (date: string) => request<Digest>(`/briefs/${date}`),
+  getWeekBrief: (weekStart: string) => request<Digest>(`/briefs/weeks/${weekStart}`),
+  getBriefAudioUrl: (date: string) => `${getConfiguredApiUrl()}/local-control/briefs/${date}/audio`,
   getProfile: () => request<Profile>("/profile"),
   updateProfile: (payload: Record<string, unknown>) =>
     request<Profile>("/profile", {
@@ -108,7 +139,10 @@ export const localControlClient = {
     }),
   runIngest: () => request<LocalControlJobResponse>("/jobs/ingest", { method: "POST" }),
   runFetchSources: () => request<LocalControlJobResponse>("/jobs/fetch-sources", { method: "POST" }),
-  runSourcePipeline: (sourceId: string, payload?: { max_items?: number }) =>
+  runSourcePipeline: (
+    sourceId: string,
+    payload?: { max_items?: number; alphaxiv_sort?: AlphaXivSort },
+  ) =>
     request<LocalControlJobResponse>(`/jobs/sources/${sourceId}/inject`, {
       method: "POST",
       body: JSON.stringify(payload ?? {}),
@@ -118,6 +152,8 @@ export const localControlClient = {
       method: "POST",
     }),
   runLightweightEnrich: () => request<LocalControlJobResponse>("/jobs/lightweight-enrich", { method: "POST" }),
+  runLightweightMetadata: () => request<LocalControlJobResponse>("/jobs/lightweight-metadata", { method: "POST" }),
+  runLightweightScoring: () => request<LocalControlJobResponse>("/jobs/lightweight-scoring", { method: "POST" }),
   stopLightweightEnrich: () =>
     request<LocalControlJobResponse>("/jobs/lightweight-enrich/stop", {
       method: "POST",

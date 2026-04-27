@@ -28,11 +28,61 @@ class ContentExtractor:
     def __init__(self, timeout_seconds: int = 20) -> None:
         self.timeout_seconds = timeout_seconds
 
+    @staticmethod
+    def _content_fingerprint(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+    def _looks_title_only(self, *, title: str, text: str) -> bool:
+        normalized_title = self._content_fingerprint(title)
+        normalized_text = self._content_fingerprint(text)
+        return bool(normalized_title) and normalized_text == normalized_title
+
+    def _extract_primary_content_text(self, soup: BeautifulSoup, *, title: str) -> str | None:
+        for selector in (
+            "article",
+            '[role="main"]',
+            "main",
+            ".post-content",
+            ".article-content",
+            ".entry-content",
+            ".content",
+        ):
+            for element in soup.select(selector):
+                candidate_html = str(element)
+                candidate = trafilatura.extract(
+                    candidate_html,
+                    include_links=True,
+                    include_comments=False,
+                    output_format="txt",
+                    favor_precision=True,
+                )
+                cleaned = (candidate or "").strip()
+                if self._looks_title_only(title=title, text=cleaned):
+                    cleaned = ""
+                if not cleaned:
+                    cleaned = element.get_text("\n", strip=True)
+                cleaned = cleaned.strip()
+                if cleaned and not self._looks_title_only(title=title, text=cleaned):
+                    return cleaned
+        return None
+
+    @staticmethod
+    def _meta_description(soup: BeautifulSoup) -> str | None:
+        for selector in (
+            'meta[name="description"]',
+            'meta[property="og:description"]',
+            'meta[name="twitter:description"]',
+        ):
+            element = soup.select_one(selector)
+            content = str(element.get("content") or "").strip() if element else ""
+            if content:
+                return content
+        return None
+
     def normalize_title(self, title: str, *, url: str | None = None) -> str:
         cleaned = re.sub(r"\s+", " ", str(title or "")).strip()
         if not cleaned:
             return ""
-
         hostname = (urlparse(str(url or "")).hostname or "").lower()
         if hostname.endswith("anthropic.com"):
             cleaned = re.sub(
@@ -155,37 +205,90 @@ class ContentExtractor:
                 return parsed
         return fallback
 
-    def extract_from_url(self, url: str) -> ExtractedContent:
-        response = fetch_safe_response(url, timeout=self.timeout_seconds)
-        response.raise_for_status()
-
-        html = response.text
-        soup = BeautifulSoup(html, "html.parser")
+    def _extract_from_html(
+        self,
+        html: str,
+        *,
+        url: str,
+        fetched_url: str | None = None,
+        mime_type: str | None = None,
+    ) -> ExtractedContent:
+        payload = str(html or "")
+        base_url = str(fetched_url or url)
+        soup = BeautifulSoup(payload, "html.parser")
         raw_title = (soup.title.get_text(strip=True) if soup.title else "") or url
         title = self.normalize_title(raw_title, url=url) or url
-        published_at = self.extract_published_at_from_html(html)
+        published_at = self.extract_published_at_from_html(payload)
 
         extracted = trafilatura.extract(
-            html,
+            payload,
             include_links=True,
             include_comments=False,
             output_format="txt",
             favor_precision=True,
         )
         links = [
-            urljoin(str(response.url), anchor["href"])
+            urljoin(base_url, anchor["href"])
             for anchor in soup.find_all("a", href=True)
             if anchor["href"]
         ]
 
-        cleaned = extracted or soup.get_text("\n", strip=True)
-        confidence = 0.85 if extracted else 0.4
+        cleaned = (extracted or "").strip()
+        confidence = 0.85 if cleaned else 0.4
+        if not cleaned:
+            cleaned = soup.get_text("\n", strip=True)
+
+        if self._looks_title_only(title=title, text=cleaned):
+            fallback = self._extract_primary_content_text(soup, title=title)
+            if fallback:
+                cleaned = fallback
+                confidence = max(confidence, 0.7)
+            else:
+                description = self._meta_description(soup)
+                if description and not self._looks_title_only(title=title, text=description):
+                    cleaned = description
+                    confidence = max(confidence, 0.5)
         return ExtractedContent(
             title=title,
             cleaned_text=cleaned[:40000],
             outbound_links=list(dict.fromkeys(links))[:50],
             published_at=published_at,
-            mime_type=response.headers.get("content-type"),
+            mime_type=mime_type or "text/html",
             extraction_confidence=confidence,
-            raw_payload={"html": html[:150000], "fetched_url": str(response.url)},
+            raw_payload={"html": payload[:150000], "fetched_url": base_url},
         )
+
+    def _extract_from_url_once(
+        self,
+        url: str,
+        *,
+        allow_insecure_tls: bool = False,
+    ) -> ExtractedContent:
+        fetch_kwargs: dict[str, object] = {"timeout": self.timeout_seconds}
+        if allow_insecure_tls:
+            fetch_kwargs["allow_insecure_tls"] = True
+        response = fetch_safe_response(url, **fetch_kwargs)
+        response.raise_for_status()
+        return self._extract_from_html(
+            response.text,
+            url=url,
+            fetched_url=str(response.url),
+            mime_type=response.headers.get("content-type"),
+        )
+
+    def extract_from_url(self, url: str, *, allow_insecure_tls: bool = False) -> ExtractedContent:
+        last_error: Exception | None = None
+        for attempt_index in range(2):
+            try:
+                return self._extract_from_url_once(
+                    url,
+                    allow_insecure_tls=allow_insecure_tls or attempt_index > 0,
+                )
+            except Exception as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"Extraction failed for {url}")
+
+    def extract_from_html(self, html: str, *, url: str) -> ExtractedContent:
+        return self._extract_from_html(html, url=url, fetched_url=url, mime_type="text/html")

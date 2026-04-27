@@ -183,7 +183,7 @@ LIGHTWEIGHT_ENRICHMENT_SCHEMA = {
 }
 
 LIGHTWEIGHT_ENRICHMENT_PROMPT_VERSION = "2026-04-08-structured-v1"
-LIGHTWEIGHT_SCORING_PROMPT_VERSION = "2026-04-08-rubric-v2"
+LIGHTWEIGHT_SCORING_PROMPT_VERSION = "2026-04-10-frontier-rubric-v3"
 
 LIGHTWEIGHT_SCORING_SCHEMA = {
     "type": "object",
@@ -496,6 +496,11 @@ class LLMClient:
         prompt_guidance = ""
         if isinstance(profile.get("prompt_guidance"), dict):
             prompt_guidance = normalize_whitespace(str(profile["prompt_guidance"].get("enrichment") or ""))
+        scoring_rubric = (
+            profile.get("scoring_rubric")
+            if isinstance(profile.get("scoring_rubric"), dict)
+            else {}
+        )
 
         profile_lines = [
             f"- Favorite topics: {', '.join(profile.get('favorite_topics') or []) or 'None'}",
@@ -503,6 +508,7 @@ class LLMClient:
             f"- Favorite sources: {', '.join(profile.get('favorite_sources') or []) or 'None'}",
             f"- Ignored topics: {', '.join(profile.get('ignored_topics') or []) or 'None'}",
         ]
+        rubric_lines = self._format_scoring_rubric_lines(scoring_rubric)
         source_lines = [
             f"- Source name: {normalized_source.get('name') or normalized_item.get('source_name') or 'Unknown'}",
             f"- Source id: {normalized_source.get('source_id') or normalized_item.get('source_id') or 'Unknown'}",
@@ -510,6 +516,7 @@ class LLMClient:
             f"- Source description: {normalized_source.get('description') or 'None'}",
             f"- Source tags: {', '.join(normalized_source.get('tags') or []) or 'None'}",
         ]
+        source_lines.extend(self._format_source_metric_lines(normalized_source))
         document_lines = [
             f"- Document kind: {normalized_item.get('content_type')}",
             f"- Title: {normalized_item.get('title')}",
@@ -520,20 +527,22 @@ class LLMClient:
         prompt = (
             "<task>\n"
             "Judge how relevant this document is for the specific user profile.\n"
+            "Treat the user as a frontier-LLM researcher and evaluate direct usefulness for what they should read next.\n"
             "Evaluate each rubric criterion separately before deciding the overall score.\n"
             "Ground every score in explicit evidence from the document, source context, and user profile.\n"
-            "Be conservative: weak, generic, or indirect evidence should reduce the score.\n"
+            "Be conservative: weak, generic, indirect, or announcement-heavy evidence should reduce the score.\n"
             "</task>\n\n"
             "<evaluation_process>\n"
-            "1. Identify concrete evidence and mismatches before scoring.\n"
-            "2. Score each rubric criterion independently instead of letting one strong signal dominate.\n"
-            "3. Apply penalties for ignored-topic overlap, generic industry chatter, thin evidence, and missing author/source support.\n"
-            "4. Set relevance_score from the rubric scores, not from general enthusiasm about the topic.\n"
-            "5. Use must_read only when the document is clearly high-priority for this specific user right now.\n"
+            "1. First decide whether the document is directly useful for frontier LLM training, post-training, evaluation, efficiency, reasoning, memory, or interpretability.\n"
+            "2. Identify concrete evidence and mismatches before scoring.\n"
+            "3. Score each rubric criterion independently instead of letting one strong signal dominate.\n"
+            "4. Use alphaXiv or source engagement only as a secondary boost after technical fit is established.\n"
+            "5. Set relevance_score from the rubric scores, not from general enthusiasm about the topic.\n"
+            "6. Use must_read only when the document is clearly high-priority for this specific user right now.\n"
             "</evaluation_process>\n\n"
             "<rubric>\n"
-            "- topic_fit_score: how strongly the document topics match favorite topics and avoid ignored topics.\n"
-            "- source_fit_score: how useful this source and its stated remit are for the user's workflow.\n"
+            "- topic_fit_score: how strongly the document topics match favorite topics and the research rubric, while avoiding ignored or deprioritized topics.\n"
+            "- source_fit_score: how useful this source and its stated remit are for the user's workflow; engagement can help, but it must stay secondary to technical fit.\n"
             "- author_fit_score: how much the named authors overlap with the user's preferred authors.\n"
             "- evidence_fit_score: how concrete, information-dense, and actionable the document appears from the title, summary, and text.\n"
             "- relevance_score: overall fit for what the user should read next; weight topic fit and evidence most heavily.\n"
@@ -548,12 +557,18 @@ class LLMClient:
             "Calibration notes:\n"
             "  * Do not reward missing evidence; unknown authors or weak source fit should stay low.\n"
             "  * Do not give >0.75 relevance on a vague title or generic summary without strong body evidence.\n"
+            "  * Do not treat fellowships, grants, acquisitions, customer stories, or generic industry chatter as high-priority research.\n"
+            "  * Benchmark mentions alone should rarely exceed 0.55 relevance unless the benchmark is genuinely hard or changes frontier model training or evaluation decisions.\n"
+            "  * Treat alphaXiv metrics as a tiebreaker: 50+ X likes or 500+ recent views is strong, 10-49 likes or 200-499 recent views is modest, and weak engagement should barely move the score.\n"
             "  * A document can be broadly interesting and still score low for this user if the profile fit is weak.\n"
             "</rubric>\n\n"
             "<user_profile>\n"
             f"{chr(10).join(profile_lines)}\n"
             f"{f'- Additional operator guidance: {prompt_guidance}{chr(10)}' if prompt_guidance else ''}"
             "</user_profile>\n\n"
+            "<research_rubric>\n"
+            f"{chr(10).join(rubric_lines) if rubric_lines else '- None'}\n"
+            "</research_rubric>\n\n"
             "<source_context>\n"
             f"{chr(10).join(source_lines)}\n"
             "</source_context>\n\n"
@@ -903,6 +918,62 @@ class LLMClient:
             "evidence_quotes": [quote[:160] for quote in evidence_quotes],
             "model": self.settings.ollama_model,
         }
+
+    @staticmethod
+    def _format_scoring_rubric_lines(rubric: dict[str, Any]) -> list[str]:
+        lines: list[str] = []
+        persona = normalize_whitespace(str(rubric.get("persona") or ""))
+        if persona:
+            lines.append(f"- Research persona: {persona}")
+        priorities = [
+            normalize_whitespace(str(value))
+            for value in (rubric.get("highest_priority_topics") or [])
+            if normalize_whitespace(str(value))
+        ]
+        if priorities:
+            lines.append(f"- Highest-priority topics: {', '.join(priorities)}")
+        deprioritize = [
+            normalize_whitespace(str(value))
+            for value in (rubric.get("deprioritize") or [])
+            if normalize_whitespace(str(value))
+        ]
+        if deprioritize:
+            lines.append(f"- Deprioritize: {', '.join(deprioritize)}")
+        alphaxiv_preferences = [
+            normalize_whitespace(str(value))
+            for value in (rubric.get("alphaxiv_preferences") or [])
+            if normalize_whitespace(str(value))
+        ]
+        lines.extend(
+            f"- alphaXiv preference: {value}" for value in alphaxiv_preferences[:3]
+        )
+        return lines
+
+    @classmethod
+    def _format_source_metric_lines(cls, source_context: dict[str, Any]) -> list[str]:
+        metrics = source_context.get("alphaxiv_metrics")
+        if not isinstance(metrics, dict):
+            return []
+        return [
+            f"- alphaXiv engagement tier: {source_context.get('alphaxiv_engagement_tier') or 'Unknown'}",
+            f"- alphaXiv public votes: {cls._format_numeric_metric(metrics.get('public_total_votes'))}",
+            f"- alphaXiv total votes: {cls._format_numeric_metric(metrics.get('total_votes'))}",
+            f"- alphaXiv visits in last 7 days: {cls._format_numeric_metric(metrics.get('visits_last_7_days'))}",
+            f"- alphaXiv lifetime visits: {cls._format_numeric_metric(metrics.get('visits_all'))}",
+            f"- alphaXiv X likes: {cls._format_numeric_metric(metrics.get('x_likes'))}",
+            f"- alphaXiv citations: {cls._format_numeric_metric(metrics.get('citations_count'))}",
+            f"- alphaXiv engagement summary: {source_context.get('alphaxiv_engagement_summary') or 'None'}",
+        ]
+
+    @staticmethod
+    def _format_numeric_metric(value: Any) -> str:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return "Unknown"
+        if parsed.is_integer():
+            return str(int(parsed))
+        return f"{parsed:.2f}"
 
     @staticmethod
     def _normalize_unit_score(value: Any) -> float:

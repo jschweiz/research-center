@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.db.models import RunStatus
 from app.schemas.ops import IngestionRunHistoryRead
+from app.schemas.profile import AlphaXivSort
 
 SourceType = Literal["website", "gmail_newsletter"]
 SourceClassificationMode = Literal["fixed", "written_content_auto"]
@@ -118,6 +119,7 @@ class SourceProbeRead(BaseModel):
 
 class SourceInjectRequest(BaseModel):
     max_items: int | None = Field(default=None, ge=1, le=250)
+    alphaxiv_sort: AlphaXivSort | None = None
 
 
 class SourceLatestLogRead(BaseModel):

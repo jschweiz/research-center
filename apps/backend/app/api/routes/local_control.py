@@ -2,18 +2,28 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db_session, get_local_control_device
+from app.core.outbound import UnsafeOutboundUrlError
 from app.schemas.advanced_enrichment import (
     AdvancedCompileRequest,
     AnswerQueryRequest,
     FileOutputRequest,
     HealthCheckRequest,
 )
-from app.schemas.briefs import BriefAvailabilityRead
-from app.schemas.items import ItemDetailRead, ItemListEntry
+from app.schemas.briefs import BriefAvailabilityRead, DigestRead
+from app.schemas.common import PaginatedResponse
+from app.schemas.items import (
+    ActionRead,
+    CapturedPageImportRequest,
+    ItemDetailRead,
+    ItemListEntry,
+    ManualImportRequest,
+    ZoteroSaveRequest,
+)
 from app.schemas.local_control import (
     LocalControlInsightsRead,
     LocalControlJobResponse,
@@ -25,11 +35,13 @@ from app.schemas.local_control import (
 from app.schemas.ops import RegenerateBriefRequest
 from app.schemas.profile import ProfileRead, ProfileUpdate
 from app.schemas.sources import SourceInjectRequest, SourceRead
+from app.services.brief_dates import iso_week_start
 from app.services.items import ItemService
 from app.services.local_control import LocalControlError, LocalControlService
 from app.services.profile import ProfileService
 from app.services.vault_briefs import VaultBriefService
 from app.services.vault_git_sync import VaultGitSyncError
+from app.services.vault_items import ItemSummaryImportError
 from app.services.vault_operations import VaultOperationService
 from app.services.vault_source_registry import VaultSourceRegistryService
 from app.services.vault_sources import SourceFetchCancelledError
@@ -74,7 +86,7 @@ def get_local_control_operations(
     return LocalControlOperationsRead(runs=runs)
 
 
-@router.get("/documents", response_model=list[ItemListEntry])
+@router.get("/documents", response_model=PaginatedResponse[ItemListEntry])
 def list_local_control_documents(
     q: str | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
@@ -82,10 +94,13 @@ def list_local_control_documents(
     source_id: str | None = None,
     date_from: date | None = Query(default=None, alias="from"),
     date_to: date | None = Query(default=None, alias="to"),
+    hide_sub_documents: bool = False,
     sort: str = "importance",
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
     _device=Depends(get_local_control_device),
-) -> list[ItemListEntry]:
-    return ItemService().list_items(
+) -> PaginatedResponse[ItemListEntry]:
+    items, total = ItemService().list_items_page(
         query=q,
         status_filter=status_filter,
         content_type=content_type,
@@ -93,8 +108,41 @@ def list_local_control_documents(
         date_from=date_from,
         date_to=date_to,
         sort=sort,
+        page=page,
+        page_size=page_size,
         include_hidden_primary_newsletters=True,
+        include_sub_documents=not hide_sub_documents,
     )
+    return PaginatedResponse[ItemListEntry](items=items, total=total)
+
+
+@router.post(
+    "/documents/import-page",
+    response_model=ItemDetailRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def import_local_control_page(
+    payload: CapturedPageImportRequest,
+    _device=Depends(get_local_control_device),
+) -> ItemDetailRead:
+    return ItemService().import_captured_page(payload)
+
+
+@router.post(
+    "/documents/import-url-with-summary",
+    response_model=ItemDetailRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def import_local_control_document_with_summary(
+    payload: ManualImportRequest,
+    _device=Depends(get_local_control_device),
+) -> ItemDetailRead:
+    try:
+        return ItemService().import_url_with_summary(str(payload.url))
+    except UnsafeOutboundUrlError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except ItemSummaryImportError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
 @router.get("/documents/{item_id}", response_model=ItemDetailRead)
@@ -106,6 +154,44 @@ def get_local_control_document(
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found.")
     return item
+
+
+@router.post("/documents/{item_id}/read", response_model=ActionRead)
+def mark_local_control_document_read(
+    item_id: str,
+    _device=Depends(get_local_control_device),
+) -> ActionRead:
+    result = ItemService().mark_read(item_id)
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found.")
+    return result
+
+
+@router.post("/documents/{item_id}/star", response_model=ActionRead)
+def star_local_control_document(
+    item_id: str,
+    _device=Depends(get_local_control_device),
+) -> ActionRead:
+    result = ItemService().toggle_star(item_id)
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found.")
+    return result
+
+
+@router.post("/documents/{item_id}/save-to-zotero", response_model=ActionRead)
+def save_local_control_document_to_zotero(
+    item_id: str,
+    payload: ZoteroSaveRequest,
+    _device=Depends(get_local_control_device),
+) -> ActionRead:
+    result = ItemService().save_to_zotero(
+        item_id,
+        tags=payload.tags,
+        note_prefix=payload.note_prefix,
+    )
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item not found.")
+    return result
 
 
 @router.get("/sources", response_model=list[SourceRead])
@@ -120,6 +206,62 @@ def get_local_control_brief_availability(
     _device=Depends(get_local_control_device),
 ) -> BriefAvailabilityRead:
     return VaultBriefService().list_availability()
+
+
+@router.get("/briefs/today", response_model=DigestRead)
+def get_local_control_today_brief(
+    _device=Depends(get_local_control_device),
+) -> DigestRead:
+    digest = VaultBriefService().get_or_generate_today()
+    if not digest:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Digest not available.")
+    return digest
+
+
+@router.get("/briefs/weeks/{week_start}", response_model=DigestRead)
+def get_local_control_weekly_brief(
+    week_start: date = Path(..., description="ISO week start date in YYYY-MM-DD format"),
+    _device=Depends(get_local_control_device),
+) -> DigestRead:
+    if iso_week_start(week_start) != week_start:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Week start must be an ISO week Monday.")
+
+    digest = VaultBriefService().get_weekly_digest(week_start)
+    if not digest:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Weekly digest not found.")
+    return digest
+
+
+@router.get("/briefs/{brief_date}", response_model=DigestRead)
+def get_local_control_brief(
+    brief_date: date = Path(..., description="Date in YYYY-MM-DD format"),
+    _device=Depends(get_local_control_device),
+) -> DigestRead:
+    digest = VaultBriefService().get_or_generate_by_date(brief_date)
+    if not digest:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Digest not found.")
+    return digest
+
+
+@router.get("/briefs/{brief_date}/audio")
+def get_local_control_brief_audio(
+    brief_date: date = Path(..., description="Date in YYYY-MM-DD format"),
+    _device=Depends(get_local_control_device),
+) -> FileResponse:
+    service = VaultBriefService()
+    try:
+        audio_path = service.get_audio_artifact_path(brief_date)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+    if not audio_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audio brief not available.")
+
+    return FileResponse(
+        audio_path,
+        media_type=service.voice_client.media_type,
+        filename=f"brief-{brief_date.isoformat()}.{service.voice_client.output_format}",
+    )
 
 
 @router.get("/profile", response_model=ProfileRead)
@@ -187,10 +329,12 @@ def run_local_source_pipeline(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found.")
 
     requested_max_items = payload.max_items if payload else None
+    requested_alphaxiv_sort = payload.alphaxiv_sort if payload else None
     try:
         operation_run_id = VaultOperationService().run_source_pipeline(
             source_id=source_id,
             max_items=requested_max_items,
+            alphaxiv_sort=requested_alphaxiv_sort,
         )
     except SourceFetchCancelledError as exc:
         return LocalControlJobResponse(
@@ -207,13 +351,19 @@ def run_local_source_pipeline(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     effective_max_items = requested_max_items or source.max_items
+    alphaxiv_sort_suffix = (
+        f" using alphaXiv {requested_alphaxiv_sort} sort"
+        if source.custom_pipeline_id == "alphaxiv-paper" and requested_alphaxiv_sort
+        else ""
+    )
     return LocalControlJobResponse(
         queued=False,
         task_name="source_inject",
         detail=(
-            "Source fetch, lightweight enrichment, and index rebuild completed for "
+            "Source fetch completed for "
             f"{source.name} with a cap of {effective_max_items} document"
-            f"{'' if effective_max_items == 1 else 's'}."
+            f"{'' if effective_max_items == 1 else 's'}{alphaxiv_sort_suffix}. "
+            "Lightweight enrichment and index refresh remain manual."
         ),
         operation_run_id=operation_run_id,
         published_edition=None,
@@ -259,6 +409,42 @@ def run_local_lightweight_enrich(
     return LocalControlJobResponse(
         queued=False,
         task_name="lightweight_enrich",
+        detail=run.summary,
+        operation_run_id=run.id,
+        published_edition=None,
+        completed_at=datetime.now(UTC),
+    )
+
+
+@router.post("/jobs/lightweight-metadata", response_model=LocalControlJobResponse)
+def run_local_lightweight_metadata(
+    _device=Depends(get_local_control_device),
+) -> LocalControlJobResponse:
+    try:
+        run = VaultOperationService().lightweight_metadata_enrich()
+    except VaultGitSyncError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return LocalControlJobResponse(
+        queued=False,
+        task_name="lightweight_metadata",
+        detail=run.summary,
+        operation_run_id=run.id,
+        published_edition=None,
+        completed_at=datetime.now(UTC),
+    )
+
+
+@router.post("/jobs/lightweight-scoring", response_model=LocalControlJobResponse)
+def run_local_lightweight_scoring(
+    _device=Depends(get_local_control_device),
+) -> LocalControlJobResponse:
+    try:
+        run = VaultOperationService().lightweight_scoring_enrich()
+    except VaultGitSyncError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return LocalControlJobResponse(
+        queued=False,
+        task_name="lightweight_scoring",
         detail=run.summary,
         operation_run_id=run.id,
         published_edition=None,

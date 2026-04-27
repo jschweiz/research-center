@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from app.core.external_urls import resolve_external_url
 from app.core.logging import bind_log_context, reset_log_context
 from app.db.models import ContentType, IngestionRunType, RunStatus
 from app.integrations.llm import LLMClient
@@ -221,6 +222,8 @@ class VaultBriefService:
                 interesting_side_signals=side_signals,
                 remaining_reads=remaining,
                 papers_table=papers,
+                read_ids=self._read_ids(),
+                starred_ids=self._starred_ids(),
             )
 
             brief_dir = self.store.brief_dir_for_date(brief_date)
@@ -439,11 +442,15 @@ class VaultBriefService:
     def _hydrate_digest(self, digest: DigestRead) -> DigestRead:
         items_index = self.store.load_items_index()
         item_lookup = {item.id: item for item in items_index.items}
+        read_ids = self._read_ids()
         starred_ids = self._starred_ids()
-        return hydrate_digest(digest, item_lookup=item_lookup, starred_ids=starred_ids)
+        return hydrate_digest(digest, item_lookup=item_lookup, read_ids=read_ids, starred_ids=starred_ids)
 
     def _starred_ids(self) -> set[str]:
         return set(self.store.load_starred_items().item_ids)
+
+    def _read_ids(self) -> set[str]:
+        return set(self.store.load_read_items().item_ids)
 
     def _aggregate_weekly_sections(
         self,
@@ -451,6 +458,7 @@ class VaultBriefService:
     ) -> dict[str, list[DigestEntryRead] | list[PaperTableEntryRead]]:
         items_index = self.store.load_items_index()
         item_lookup = {item.id: item for item in items_index.items}
+        read_ids = self._read_ids()
         starred_ids = self._starred_ids()
         aggregates: dict[str, WeeklyAggregate] = {}
 
@@ -549,7 +557,7 @@ class VaultBriefService:
 
         editorial_shortlist = [
             DigestEntryRead(
-                item=to_item_list_entry(item["entry"], starred=item["starred"]),
+                item=to_item_list_entry(item["entry"], read=item["entry"].id in read_ids, starred=item["starred"]),
                 note=item["note"],
                 rank=index + 1,
             )
@@ -559,7 +567,7 @@ class VaultBriefService:
         ]
         headlines = [
             DigestEntryRead(
-                item=to_item_list_entry(item["entry"], starred=item["starred"]),
+                item=to_item_list_entry(item["entry"], read=item["entry"].id in read_ids, starred=item["starred"]),
                 note=item["note"],
                 rank=index + 1,
             )
@@ -567,7 +575,7 @@ class VaultBriefService:
         ]
         side_signals = [
             DigestEntryRead(
-                item=to_item_list_entry(item["entry"], starred=item["starred"]),
+                item=to_item_list_entry(item["entry"], read=item["entry"].id in read_ids, starred=item["starred"]),
                 note=item["note"],
                 rank=index + 1,
             )
@@ -577,7 +585,7 @@ class VaultBriefService:
         ]
         remaining = [
             DigestEntryRead(
-                item=to_item_list_entry(item["entry"], starred=item["starred"]),
+                item=to_item_list_entry(item["entry"], read=item["entry"].id in read_ids, starred=item["starred"]),
                 note=item["note"],
                 rank=index + 1,
             )
@@ -587,7 +595,7 @@ class VaultBriefService:
         ]
         papers = [
             PaperTableEntryRead(
-                item=to_item_list_entry(item["entry"], starred=item["starred"]),
+                item=to_item_list_entry(item["entry"], read=item["entry"].id in read_ids, starred=item["starred"]),
                 rank=index + 1,
                 zotero_tags=item["zotero_tags"],
                 credibility_score=item["credibility_score"],
@@ -721,7 +729,7 @@ class VaultBriefService:
                 continue
             lines.extend(["", f"## {title}", ""])
             for entry in entries:
-                lines.append(f"- [{entry.item.title}]({entry.item.canonical_url})")
+                lines.append(f"- [{entry.item.title}]({resolve_external_url(entry.item.canonical_url)})")
                 if entry.note:
                     lines.append(f"  - {entry.note}")
         if digest.audio_brief:

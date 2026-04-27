@@ -72,7 +72,7 @@ def fetch_sources_task(source_id: str | None = None) -> dict[str, object]:
                     "created_count": run.created_count,
                     "updated_count": run.updated_count,
                 }
-            result = source_service.sync_enabled_sources(trigger="cli_fetch")
+            result = source_service.sync_enabled_sources(trigger="cli_fetch", parallel=True)
             sync.push_local_control_changes(message="Fetch sources")
             return {
                 "source_count": result.source_count,

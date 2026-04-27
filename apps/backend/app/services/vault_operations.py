@@ -6,6 +6,7 @@ from app.db.models import IngestionRunType, RunStatus
 from app.schemas.advanced_enrichment import AdvancedOutputKind, HealthCheckScope
 from app.schemas.briefs import AudioBriefRead
 from app.schemas.ops import IngestionRunHistoryRead, OperationBasicInfoRead, PipelineStatusRead
+from app.schemas.profile import AlphaXivSort
 from app.schemas.published import PublishedEditionSummaryRead
 from app.services.vault_advanced_enrichment import VaultAdvancedEnrichmentService
 from app.services.vault_briefs import VaultBriefService
@@ -15,7 +16,6 @@ from app.services.vault_lightweight_enrichment import VaultLightweightEnrichment
 from app.services.vault_publishing import VaultPublisherService
 from app.services.vault_runtime import RunRecorder
 from app.services.vault_sources import VaultSourceIngestionService
-from app.services.vault_wiki import VaultWikiService
 from app.vault.store import VaultStore
 
 
@@ -29,7 +29,6 @@ class VaultOperationService:
         self.briefs = VaultBriefService()
         self.publisher = VaultPublisherService()
         self.sync = VaultGitSyncService()
-        self.wiki = VaultWikiService()
         self.runs = RunRecorder(self.store)
         self.store.ensure_layout()
 
@@ -38,6 +37,12 @@ class VaultOperationService:
         return PipelineStatusRead(
             raw_document_count=len(raw_documents),
             lightweight_pending_count=self.lightweight.count_pending_documents(
+                documents=raw_documents
+            ),
+            lightweight_metadata_pending_count=self.lightweight.count_metadata_pending_documents(
+                documents=raw_documents
+            ),
+            lightweight_scoring_pending_count=self.lightweight.count_scoring_pending_documents(
                 documents=raw_documents
             ),
             items_index=self.ingestion.items_index_status(documents=raw_documents),
@@ -121,7 +126,7 @@ class VaultOperationService:
 
     def fetch_sources(self) -> str | None:
         self.sync.prepare_for_mutation()
-        self.source_ingestion.sync_enabled_sources(trigger="manual_fetch")
+        self.source_ingestion.sync_enabled_sources(trigger="manual_fetch", parallel=True)
         self.sync.push_local_control_changes(message="Fetch sources")
         return self.latest_run_id("raw_fetch")
 
@@ -141,23 +146,52 @@ class VaultOperationService:
         self.sync.push_local_control_changes(message="Run lightweight enrichment")
         return run
 
+    def lightweight_metadata_enrich(
+        self, *, source_id: str | None = None, doc_id: str | None = None, force: bool = False
+    ) -> IngestionRunHistoryRead:
+        self.sync.prepare_for_mutation()
+        run = self.lightweight.enrich_stale_documents(
+            trigger="manual_lightweight_metadata",
+            source_id=source_id,
+            doc_id=doc_id,
+            phase="metadata",
+            force=force,
+        )
+        self.sync.push_local_control_changes(message="Run lightweight metadata refresh")
+        return run
+
+    def lightweight_scoring_enrich(
+        self, *, source_id: str | None = None, doc_id: str | None = None, force: bool = False
+    ) -> IngestionRunHistoryRead:
+        self.sync.prepare_for_mutation()
+        run = self.lightweight.enrich_stale_documents(
+            trigger="manual_lightweight_scoring",
+            source_id=source_id,
+            doc_id=doc_id,
+            phase="scoring",
+            force=force,
+        )
+        self.sync.push_local_control_changes(message="Run lightweight scoring refresh")
+        return run
+
     def request_stop_for_lightweight(self) -> IngestionRunHistoryRead:
         return self.lightweight.request_stop_for_run()
 
-    def run_source_pipeline(self, *, source_id: str, max_items: int | None = None) -> str | None:
+    def run_source_pipeline(
+        self,
+        *,
+        source_id: str,
+        max_items: int | None = None,
+        alphaxiv_sort: AlphaXivSort | None = None,
+    ) -> str | None:
         self.sync.prepare_for_mutation()
         fetch_run = self.source_ingestion.sync_source_by_id(
             source_id,
             trigger="manual_source_fetch",
             max_items=max_items,
+            alphaxiv_sort=alphaxiv_sort,
         )
-        self.lightweight.enrich_stale_documents(
-            trigger=f"manual_source_enrich:{source_id}",
-            source_id=source_id,
-        )
-        self.ingestion.rebuild_items_index(trigger=f"manual_source_index:{source_id}")
-        self.wiki.compile(trigger=f"manual_source_wiki:{source_id}")
-        self.sync.push_local_changes(message=f"Run source pipeline for {source_id}")
+        self.sync.push_local_changes(message=f"Fetch source {source_id}")
         return fetch_run.id
 
     def request_stop_for_source(self, *, source_id: str) -> IngestionRunHistoryRead:

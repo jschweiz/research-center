@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -12,6 +13,7 @@ from bs4 import BeautifulSoup
 from dateutil import parser as date_parser
 
 from app.core.config import get_settings
+from app.core.external_urls import resolve_external_url
 from app.core.outbound import fetch_safe_response
 from app.db.models import IngestionRunType, RunStatus
 from app.db.session import get_session_factory
@@ -20,7 +22,7 @@ from app.integrations.extractors import ContentExtractor, ExtractedContent
 from app.integrations.gmail import GmailConnector, NewsletterMessage
 from app.integrations.gmail_imap import GmailImapConnector
 from app.schemas.ops import IngestionRunHistoryRead, OperationBasicInfoRead
-from app.schemas.profile import AlphaXivSearchSettings
+from app.schemas.profile import AlphaXivSearchSettings, AlphaXivSort
 from app.services.connections import ConnectionService
 from app.services.profile import load_profile_snapshot
 from app.services.text import normalize_whitespace
@@ -32,15 +34,23 @@ from app.services.vault_runtime import (
     readable_doc_id,
     utcnow,
 )
-from app.vault.models import RawDocumentFrontmatter, VaultSourceDefinition, VaultSourcesConfig
+from app.vault.models import (
+    SUB_DOCUMENT_TAG,
+    DefaultSourcesState,
+    RawDocumentFrontmatter,
+    VaultSourceDefinition,
+    VaultSourcesConfig,
+)
 from app.vault.store import LeaseBusyError, VaultStore
 
 TRACKING_PREFIXES = ("utm_", "mc_", "ref", "source")
 WEBSITE_TIMEOUT_SECONDS = 20
+RAW_FETCH_LEASE_TTL_SECONDS = 900
 DEFAULT_HTML_FILENAME = "original.html"
 NEWSLETTER_ENTRY_LIMIT = 8
 ALPHAXIV_PODCAST_FILENAME = "alphaxiv-podcast.mp3"
 ALPHAXIV_DISCOVERY_PAGE_SIZE = 50
+WEBSITE_ENTRY_EXTRACTION_PARALLELISM = 4
 NEWSLETTER_NOISE_TEXT = (
     "unsubscribe",
     "privacy policy",
@@ -49,6 +59,8 @@ NEWSLETTER_NOISE_TEXT = (
     "view in browser",
     "manage preferences",
 )
+ALPHASIGNAL_METRIC_RE = re.compile(r"^\d[\d,]*(?:\s+(?:likes|stars))$", re.IGNORECASE)
+ALPHASIGNAL_SPONSOR_RE = re.compile(r"^(?:presented by\b|sponsor(?:ed)?\b)", re.IGNORECASE)
 TLDR_ISSUE_HEADING_RE = re.compile(r"^TLDR\s+\d{4}-\d{2}-\d{2}$", re.IGNORECASE)
 TLDR_READ_TIME_RE = re.compile(r"\((\d+\s+minute(?:s)? read)\)\s*$", re.IGNORECASE)
 TLDR_AD_HOSTS = {
@@ -60,6 +72,15 @@ TLDR_AD_HOSTS = {
 MEDIUM_HIGHLIGHTS_HEADING_RE = re.compile(r"^today[’']s highlights$", re.IGNORECASE)
 MEDIUM_READ_TIME_RE = re.compile(r"^\d+\s+min read$", re.IGNORECASE)
 MEDIUM_HOSTS = {"medium.com", "www.medium.com"}
+JACK_CLARK_HOSTS = {"jack-clark.net", "www.jack-clark.net"}
+JACK_CLARK_NOISE_HOSTS = {"importai.substack.com", "www.importai.substack.com"}
+JACK_CLARK_SEPARATOR_RE = re.compile(r"^\*{3,}$")
+JACK_CLARK_INTRO_RE = re.compile(r"^welcome to import ai\b", re.IGNORECASE)
+JACK_CLARK_FOOTER_RE = re.compile(
+    r"^(?:thanks for reading!?|discover more from import ai)\b",
+    re.IGNORECASE,
+)
+JACK_CLARK_STOP_TITLES = {"tech tales"}
 MISTRAL_NEWS_SCRIPT_ENTRY_RE = re.compile(
     r'\{\\"id\\":\\"[^"]+\\",\\"slug\\":\\"(?P<slug>[^"]+)\\",'
     r'.*?\\"date\\":\\"(?P<date>[^"]+)\\",'
@@ -71,6 +92,12 @@ MISTRAL_NEWS_SCRIPT_ENTRY_RE = re.compile(
 )
 RawAssetContent = str | bytes
 RawAssetMap = dict[str, RawAssetContent]
+DEFAULT_SOURCES_CATALOG_VERSION = 4
+DEFAULT_SOURCE_MIGRATIONS: dict[int, tuple[str, ...]] = {
+    2: ("jack-clark-import-ai",),
+    3: ("the-batch-research",),
+    4: ("alphasignal-email",),
+}
 
 DEFAULT_SOURCES = VaultSourcesConfig.model_validate(
     {
@@ -139,6 +166,57 @@ DEFAULT_SOURCES = VaultSourcesConfig.model_validate(
                 },
             },
             {
+                "id": "the-batch-research",
+                "type": "website",
+                "name": "The Batch Research",
+                "enabled": True,
+                "raw_kind": "blog-post",
+                "custom_pipeline_id": "the-batch-research",
+                "classification_mode": "fixed",
+                "decomposition_mode": "none",
+                "description": (
+                    "DeepLearning.AI The Batch posts discovered from the research tag index."
+                ),
+                "tags": ["deeplearning-ai", "official", "research", "website", "blog-post"],
+                "url": "https://www.deeplearning.ai/the-batch/tag/research/",
+                "max_items": 20,
+                "config_json": {
+                    "discovery_mode": "website_index",
+                    "website_url": "https://www.deeplearning.ai/the-batch/tag/research/",
+                    "allowed_hosts": ["www.deeplearning.ai", "deeplearning.ai"],
+                    "article_path_prefixes": ["/the-batch/"],
+                    "exclude_patterns": [
+                        r"^/the-batch/?$",
+                        r"^/the-batch/about/?$",
+                        r"^/the-batch/tag/",
+                    ],
+                },
+            },
+            {
+                "id": "jack-clark-import-ai",
+                "type": "website",
+                "name": "Import AI",
+                "enabled": True,
+                "raw_kind": "newsletter",
+                "custom_pipeline_id": "jack-clark-import-ai",
+                "classification_mode": "written_content_auto",
+                "decomposition_mode": "newsletter_entries",
+                "description": (
+                    "Jack Clark's weekly Import AI issues from jack-clark.net, "
+                    "with paragraph-delimited story decomposition."
+                ),
+                "tags": ["newsletter", "ai", "analysis", "policy", "website"],
+                "url": "https://jack-clark.net/feed/",
+                "max_items": 20,
+                "config_json": {
+                    "discovery_mode": "rss_feed",
+                    "website_url": "https://jack-clark.net/",
+                    "allowed_hosts": ["jack-clark.net", "www.jack-clark.net"],
+                    "article_path_prefixes": ["/20"],
+                    "newsletter_parser": "jack_clark_import_ai",
+                },
+            },
+            {
                 "id": "tldr-email",
                 "type": "gmail_newsletter",
                 "name": "TLDR Email",
@@ -177,6 +255,23 @@ DEFAULT_SOURCES = VaultSourcesConfig.model_validate(
                 },
             },
             {
+                "id": "alphasignal-email",
+                "type": "gmail_newsletter",
+                "name": "AlphaSignal Email",
+                "enabled": True,
+                "raw_kind": "newsletter",
+                "custom_pipeline_id": "alphasignal-email",
+                "classification_mode": "written_content_auto",
+                "decomposition_mode": "newsletter_entries",
+                "description": "AlphaSignal daily AI briefings pulled from Gmail.",
+                "tags": ["newsletter", "alphasignal", "email", "ai"],
+                "url": None,
+                "max_items": 20,
+                "config_json": {
+                    "senders": ["news@alphasignal.ai"],
+                },
+            },
+            {
                 "id": "alphaxiv-paper",
                 "type": "website",
                 "name": "alphaXiv Papers",
@@ -207,6 +302,7 @@ class WebsiteEntry:
     title: str
     published_at: datetime | None = None
     summary: str | None = None
+    content_html: str | None = None
 
 
 @dataclass(frozen=True)
@@ -275,16 +371,51 @@ class VaultFetchService:
 
     def ensure_default_sources_config(self) -> VaultSourcesConfig:
         current = self.store.load_sources_config()
-        if current.sources:
+        state = self.store.load_default_sources_state()
+        if state.catalog_version >= DEFAULT_SOURCES_CATALOG_VERSION:
             return current
-        self.store.save_sources_config(DEFAULT_SOURCES)
-        return self.store.load_sources_config()
+
+        if not current.sources:
+            self.store.save_sources_config(DEFAULT_SOURCES.model_copy(deep=True))
+            self.store.save_default_sources_state(
+                DefaultSourcesState(catalog_version=DEFAULT_SOURCES_CATALOG_VERSION)
+            )
+            return self.store.load_sources_config()
+
+        existing_ids = {source.id for source in current.sources}
+        migration_ids = [
+            source_id
+            for version, source_ids in sorted(DEFAULT_SOURCE_MIGRATIONS.items())
+            if version > state.catalog_version
+            for source_id in source_ids
+        ]
+        default_sources_by_id = {source.id: source for source in DEFAULT_SOURCES.sources}
+        pending_sources = [
+            default_sources_by_id[source_id].model_copy(deep=True)
+            for source_id in migration_ids
+            if source_id not in existing_ids and source_id in default_sources_by_id
+        ]
+        if pending_sources:
+            self.store.save_sources_config(
+                current.model_copy(update={"sources": [*current.sources, *pending_sources]})
+            )
+            current = self.store.load_sources_config()
+
+        self.store.save_default_sources_state(
+            DefaultSourcesState(catalog_version=DEFAULT_SOURCES_CATALOG_VERSION)
+        )
+        return current
 
     def get_source(self, source_id: str) -> VaultSourceDefinition | None:
         config = self.ensure_default_sources_config()
         return next((source for source in config.sources if source.id == source_id), None)
 
-    def sync_enabled_sources(self, *, trigger: str = "manual_fetch") -> SourceSyncResult:
+    def sync_enabled_sources(
+        self,
+        *,
+        trigger: str = "manual_fetch",
+        parallel: bool = False,
+    ) -> SourceSyncResult:
         config = self.ensure_default_sources_config()
         enabled_sources = [source for source in config.sources if source.enabled]
         if not self.settings.vault_source_pipelines_enabled:
@@ -304,7 +435,11 @@ class VaultFetchService:
         lease = None
         try:
             try:
-                lease = self.store.acquire_lease(name="raw-fetch", owner="mac", ttl_seconds=900)
+                lease = self.store.acquire_lease(
+                    name="raw-fetch",
+                    owner="mac",
+                    ttl_seconds=RAW_FETCH_LEASE_TTL_SECONDS,
+                )
             except LeaseBusyError as exc:
                 run.errors.append(str(exc))
                 self.runs.finish(
@@ -325,34 +460,121 @@ class VaultFetchService:
         try:
             synced_document_count = 0
             failed_source_count = 0
-            run.source_count = len(enabled_sources)
-            for source in enabled_sources:
-                synced_count, source_run = self._sync_source_with_run(source, trigger=trigger)
-                synced_document_count += synced_count
-                if source_run.status == RunStatus.FAILED:
-                    failed_source_count += 1
-                    run.failed_source_count += 1
-                    for error in source_run.errors:
-                        run.errors.append(f"{source.name}: {error}")
+            completed_sources = 0
+            parallelism = len(enabled_sources) if parallel and len(enabled_sources) > 1 else None
+            self._update_enabled_sources_run_progress(
+                run=run,
+                total_sources=len(enabled_sources),
+                completed_sources=completed_sources,
+                synced_document_count=synced_document_count,
+                failed_source_count=failed_source_count,
+                parallelism=parallelism,
+            )
+            if parallelism is not None:
                 self.runs.log(
                     run,
-                    f"{source.name}: {source_run.summary}",
-                    level="error" if source_run.status == RunStatus.FAILED else "info",
+                    f"Starting raw fetch for {len(enabled_sources)} sources with {parallelism} parallel worker"
+                    f"{'' if parallelism == 1 else 's'}.",
                 )
+                with ThreadPoolExecutor(max_workers=parallelism) as executor:
+                    future_to_source = {
+                        executor.submit(
+                            self._sync_source_with_source_lease,
+                            source,
+                            trigger=trigger,
+                        ): source
+                        for source in enabled_sources
+                    }
+                    for future in as_completed(future_to_source):
+                        source = future_to_source[future]
+                        completed_sources += 1
+                        try:
+                            synced_count, source_run = future.result()
+                        except Exception as exc:
+                            failed_source_count += 1
+                            run.errors.append(f"{source.name}: {str(exc) or exc.__class__.__name__}")
+                            self._update_enabled_sources_run_progress(
+                                run=run,
+                                total_sources=len(enabled_sources),
+                                completed_sources=completed_sources,
+                                synced_document_count=synced_document_count,
+                                failed_source_count=failed_source_count,
+                                parallelism=parallelism,
+                            )
+                            self.runs.log(
+                                run,
+                                f"{source.name}: {exc}",
+                                level="error",
+                            )
+                            continue
 
-            run.total_titles = synced_document_count
-            run.basic_info.extend(
-                [
-                    OperationBasicInfoRead(label="Sources", value=str(len(enabled_sources))),
-                    OperationBasicInfoRead(
-                        label="Raw docs synced", value=str(synced_document_count)
-                    ),
-                    OperationBasicInfoRead(label="Failures", value=str(failed_source_count)),
-                    OperationBasicInfoRead(
-                        label="Sources config", value="SQLite `vault_sources`"
-                    ),
-                ]
-            )
+                        synced_document_count += synced_count
+                        if source_run.status == RunStatus.FAILED:
+                            failed_source_count += 1
+                            for error in source_run.errors:
+                                run.errors.append(f"{source.name}: {error}")
+                        self._update_enabled_sources_run_progress(
+                            run=run,
+                            total_sources=len(enabled_sources),
+                            completed_sources=completed_sources,
+                            synced_document_count=synced_document_count,
+                            failed_source_count=failed_source_count,
+                            parallelism=parallelism,
+                        )
+                        self.runs.log(
+                            run,
+                            f"{source.name}: {source_run.summary}",
+                            level="error" if source_run.status == RunStatus.FAILED else "info",
+                        )
+            else:
+                self.runs.log(
+                    run,
+                    f"Starting raw fetch for {len(enabled_sources)} source"
+                    f"{'' if len(enabled_sources) == 1 else 's'} sequentially.",
+                )
+                for source in enabled_sources:
+                    completed_sources += 1
+                    try:
+                        synced_count, source_run = self._sync_source_with_source_lease(
+                            source,
+                            trigger=trigger,
+                        )
+                    except Exception as exc:
+                        failed_source_count += 1
+                        run.errors.append(f"{source.name}: {str(exc) or exc.__class__.__name__}")
+                        self._update_enabled_sources_run_progress(
+                            run=run,
+                            total_sources=len(enabled_sources),
+                            completed_sources=completed_sources,
+                            synced_document_count=synced_document_count,
+                            failed_source_count=failed_source_count,
+                            parallelism=None,
+                        )
+                        self.runs.log(
+                            run,
+                            f"{source.name}: {exc}",
+                            level="error",
+                        )
+                        continue
+                    synced_document_count += synced_count
+                    if source_run.status == RunStatus.FAILED:
+                        failed_source_count += 1
+                        for error in source_run.errors:
+                            run.errors.append(f"{source.name}: {error}")
+                    self._update_enabled_sources_run_progress(
+                        run=run,
+                        total_sources=len(enabled_sources),
+                        completed_sources=completed_sources,
+                        synced_document_count=synced_document_count,
+                        failed_source_count=failed_source_count,
+                        parallelism=None,
+                    )
+                    self.runs.log(
+                        run,
+                        f"{source.name}: {source_run.summary}",
+                        level="error" if source_run.status == RunStatus.FAILED else "info",
+                    )
+
             summary = (
                 f"Fetched {synced_document_count} raw document"
                 f"{'' if synced_document_count == 1 else 's'} from {len(enabled_sources)} source"
@@ -374,12 +596,71 @@ class VaultFetchService:
             if lease is not None:
                 self.store.release_lease(lease)
 
+    def _update_enabled_sources_run_progress(
+        self,
+        *,
+        run,
+        total_sources: int,
+        completed_sources: int,
+        synced_document_count: int,
+        failed_source_count: int,
+        parallelism: int | None,
+    ) -> None:
+        run.source_count = total_sources
+        run.failed_source_count = failed_source_count
+        run.total_titles = synced_document_count
+        self._upsert_run_basic_info(run, label="Sources", value=str(total_sources))
+        self._upsert_run_basic_info(
+            run, label="Sources completed", value=str(completed_sources)
+        )
+        self._upsert_run_basic_info(
+            run, label="Raw docs synced", value=str(synced_document_count)
+        )
+        self._upsert_run_basic_info(run, label="Failures", value=str(failed_source_count))
+        self._upsert_run_basic_info(run, label="Sources config", value="SQLite `vault_sources`")
+        if parallelism is not None:
+            self._upsert_run_basic_info(run, label="Parallelism", value=str(parallelism))
+
+    @staticmethod
+    def _source_fetch_lease_name(source_id: str) -> str:
+        return f"raw-fetch-source:{source_id}"
+
+    def _sync_source_with_source_lease(
+        self,
+        source: VaultSourceDefinition,
+        *,
+        trigger: str,
+        max_items: int | None = None,
+        alphaxiv_sort: AlphaXivSort | None = None,
+    ) -> tuple[int, IngestionRunHistoryRead]:
+        lease = None
+        try:
+            lease = self.store.acquire_lease(
+                name=self._source_fetch_lease_name(source.id),
+                owner="mac",
+                ttl_seconds=RAW_FETCH_LEASE_TTL_SECONDS,
+            )
+        except LeaseBusyError as exc:
+            raise RuntimeError(f"Raw fetch is already active for {source.name}.") from exc
+
+        try:
+            return self._sync_source_with_run(
+                source,
+                trigger=trigger,
+                max_items=max_items,
+                alphaxiv_sort=alphaxiv_sort,
+            )
+        finally:
+            if lease is not None:
+                self.store.release_lease(lease)
+
     def sync_source_by_id(
         self,
         source_id: str,
         *,
         trigger: str = "manual_source_fetch",
         max_items: int | None = None,
+        alphaxiv_sort: AlphaXivSort | None = None,
     ) -> IngestionRunHistoryRead:
         source = self.get_source(source_id)
         if source is None:
@@ -387,23 +668,22 @@ class VaultFetchService:
         if not self.settings.vault_source_pipelines_enabled:
             raise RuntimeError("Source pipelines are disabled in this environment.")
 
-        lease = None
-        try:
-            lease = self.store.acquire_lease(name="raw-fetch", owner="mac", ttl_seconds=900)
-            _, run_record = self._sync_source_with_run(source, trigger=trigger, max_items=max_items)
-            if self._run_was_cancelled(run_record):
-                raise SourceFetchCancelledError(
-                    str(run_record.summary),
-                    run_id=run_record.id,
-                    source_id=source.id,
-                )
-            if run_record.status == RunStatus.FAILED:
-                detail = run_record.errors[0] if run_record.errors else run_record.summary
-                raise RuntimeError(detail)
-            return run_record
-        finally:
-            if lease is not None:
-                self.store.release_lease(lease)
+        _, run_record = self._sync_source_with_source_lease(
+            source,
+            trigger=trigger,
+            max_items=max_items,
+            alphaxiv_sort=alphaxiv_sort,
+        )
+        if self._run_was_cancelled(run_record):
+            raise SourceFetchCancelledError(
+                str(run_record.summary),
+                run_id=run_record.id,
+                source_id=source.id,
+            )
+        if run_record.status == RunStatus.FAILED:
+            detail = run_record.errors[0] if run_record.errors else run_record.summary
+            raise RuntimeError(detail)
+        return run_record
 
     def request_stop_for_source(self, source_id: str) -> IngestionRunHistoryRead:
         source = self.get_source(source_id)
@@ -435,6 +715,7 @@ class VaultFetchService:
         *,
         trigger: str,
         max_items: int | None = None,
+        alphaxiv_sort: AlphaXivSort | None = None,
     ) -> tuple[int, IngestionRunHistoryRead]:
         effective_max_items = max_items if max_items is not None else source.max_items
         run = self.runs.start(
@@ -464,6 +745,16 @@ class VaultFetchService:
             run.basic_info.append(
                 OperationBasicInfoRead(label="Custom pipeline", value=source.custom_pipeline_id)
             )
+        if source.custom_pipeline_id == "alphaxiv-paper":
+            effective_alphaxiv_settings = self._load_alphaxiv_search_settings(
+                sort_override=alphaxiv_sort
+            )
+            run.basic_info.append(
+                OperationBasicInfoRead(
+                    label="AlphaXiv sort",
+                    value=effective_alphaxiv_settings.sort,
+                )
+            )
         self.runs.log(run, f"Starting raw fetch for {source.name}.")
         fetch_step = self.runs.start_step(run, step_kind="raw_fetch", source_id=source.id)
 
@@ -473,6 +764,7 @@ class VaultFetchService:
                     source,
                     run,
                     max_items=effective_max_items,
+                    alphaxiv_sort=alphaxiv_sort,
                 )
             except SourceFetchCancelledError as exc:
                 message = str(exc)
@@ -527,15 +819,17 @@ class VaultFetchService:
             run.total_titles = synced
             run.created_count = created_count
             run.updated_count = updated_count
-            run.basic_info.extend(
-                [
-                    OperationBasicInfoRead(label="Raw docs synced", value=str(synced)),
-                    OperationBasicInfoRead(label="Created", value=str(created_count)),
-                    OperationBasicInfoRead(label="Updated", value=str(updated_count)),
-                    OperationBasicInfoRead(
-                        label="Kinds", value=", ".join(sorted(kinds)) if kinds else "none"
-                    ),
-                ]
+            self._upsert_run_basic_info(
+                run, label="Raw docs synced", value=str(synced)
+            )
+            self._upsert_run_basic_info(
+                run, label="Created", value=str(created_count)
+            )
+            self._upsert_run_basic_info(
+                run, label="Updated", value=str(updated_count)
+            )
+            self._upsert_run_basic_info(
+                run, label="Kinds", value=", ".join(sorted(kinds)) if kinds else "none"
             )
             self.runs.log(
                 run,
@@ -567,6 +861,50 @@ class VaultFetchService:
     def _run_was_cancelled(run: IngestionRunHistoryRead) -> bool:
         return any(entry.label == "Canceled" and entry.value == "local-control" for entry in run.basic_info)
 
+    @staticmethod
+    def _upsert_run_basic_info(
+        run,
+        *,
+        label: str,
+        value: str,
+    ) -> None:
+        for entry in run.basic_info:
+            if entry.label == label:
+                entry.value = value
+                return
+        run.basic_info.append(OperationBasicInfoRead(label=label, value=value))
+
+    def _sync_source_live_progress(
+        self,
+        *,
+        run,
+        inputs_planned: int | None,
+        inputs_processed: int,
+        raw_docs_synced: int,
+        created_count: int,
+        updated_count: int,
+        decomposition_count: int,
+    ) -> None:
+        run.total_titles = raw_docs_synced
+        run.created_count = created_count
+        run.updated_count = updated_count
+        if inputs_planned is not None:
+            self._upsert_run_basic_info(
+                run, label="Inputs planned", value=str(inputs_planned)
+            )
+        self._upsert_run_basic_info(
+            run, label="Inputs processed", value=str(inputs_processed)
+        )
+        self._upsert_run_basic_info(
+            run, label="Raw docs synced", value=str(raw_docs_synced)
+        )
+        self._upsert_run_basic_info(run, label="Created", value=str(created_count))
+        self._upsert_run_basic_info(run, label="Updated", value=str(updated_count))
+        if decomposition_count:
+            self._upsert_run_basic_info(
+                run, label="Derived docs", value=str(decomposition_count)
+            )
+
     def _load_run_record(self, run_id: str) -> IngestionRunHistoryRead | None:
         for payload in reversed(self.store.load_run_records()):
             if str(payload.get("id") or "").strip() == run_id:
@@ -593,9 +931,15 @@ class VaultFetchService:
         run,
         *,
         max_items: int,
+        alphaxiv_sort: AlphaXivSort | None = None,
     ) -> tuple[int, dict[str, int], int, int, int]:
         if source.type == "website":
-            return self._sync_website_source(source, run, max_items=max_items)
+            return self._sync_website_source(
+                source,
+                run,
+                max_items=max_items,
+                alphaxiv_sort=alphaxiv_sort,
+            )
         if source.type == "gmail_newsletter":
             connector = self._build_gmail_connector()
             if connector is None:
@@ -609,22 +953,65 @@ class VaultFetchService:
         run,
         *,
         max_items: int,
+        alphaxiv_sort: AlphaXivSort | None = None,
     ) -> tuple[int, dict[str, int], int, int, int]:
         if source.custom_pipeline_id == "alphaxiv-paper":
-            return self._sync_alphaxiv_source(source, run, max_items=max_items)
+            return self._sync_alphaxiv_source(
+                source,
+                run,
+                max_items=max_items,
+                alphaxiv_sort=alphaxiv_sort,
+            )
 
         synced = 0
         created_count = 0
         updated_count = 0
+        decomposition_count = 0
         counts_by_kind: dict[str, int] = {}
+        entries = self._discover_website_entries(source, max_entries=max_items, run=run)
+        self._sync_source_live_progress(
+            run=run,
+            inputs_planned=len(entries),
+            inputs_processed=0,
+            raw_docs_synced=synced,
+            created_count=created_count,
+            updated_count=updated_count,
+            decomposition_count=decomposition_count,
+        )
+        self.runs.log(
+            run,
+            f"{source.name}: discovered {len(entries)} source input{'s' if len(entries) != 1 else ''} to fetch.",
+        )
         self._raise_if_stop_requested(run=run, source=source)
-        for entry in self._discover_website_entries(source, max_entries=max_items, run=run):
+        extracted_entries = self._extract_website_entries(
+            source=source,
+            entries=entries,
+            run=run,
+        )
+        for inputs_processed, (entry, extracted) in enumerate(
+            zip(entries, extracted_entries, strict=True),
+            start=1,
+        ):
             self._raise_if_stop_requested(run=run, source=source)
-            extracted = self._extract_website_entry(entry)
             title = extracted.title or entry.title or entry.link
             body = extracted.cleaned_text or entry.summary or entry.title or entry.link
             published_at = extracted.published_at or entry.published_at
-            kind = self._resolve_raw_kind(source=source, source_url=entry.link, title=title)
+            parent_entries = (
+                self._extract_website_newsletter_entries(source, entry, extracted)
+                if source.decomposition_mode == "newsletter_entries"
+                else []
+            )
+            if parent_entries:
+                body = self._render_website_newsletter_body(
+                    entry=entry,
+                    stories=parent_entries,
+                )
+            parent_visibility = "hidden" if parent_entries else "visible"
+            kind = (
+                source.raw_kind
+                if source.raw_kind == "newsletter"
+                else self._resolve_raw_kind(source=source, source_url=entry.link, title=title)
+            )
             asset_map = {}
             html = (
                 extracted.raw_payload.get("html")
@@ -648,18 +1035,58 @@ class VaultFetchService:
                 asset_map=asset_map,
                 doc_role="primary",
                 parent_id=None,
-                index_visibility="visible",
+                index_visibility=parent_visibility,
                 short_summary=None,
             )
             counts_by_kind[result.kind] = counts_by_kind.get(result.kind, 0) + 1
             created_count += 1 if result.created else 0
             updated_count += 1 if result.updated else 0
             synced += 1
+            current_child_external_keys: set[str] = set()
+            for parent_entry in parent_entries:
+                child_result = self._upsert_raw_document(
+                    source=source,
+                    kind=parent_entry.kind,
+                    stable_key=parent_entry.external_key,
+                    external_key=parent_entry.external_key,
+                    title=parent_entry.title,
+                    body=parent_entry.body,
+                    source_url=parent_entry.link,
+                    source_name=source.name,
+                    authors=[],
+                    published_at=published_at,
+                    tags=[*source.tags, parent_entry.kind],
+                    asset_map=parent_entry.asset_map,
+                    doc_role="derived",
+                    parent_id=result.doc_id,
+                    index_visibility="visible",
+                )
+                current_child_external_keys.add(parent_entry.external_key)
+                counts_by_kind[child_result.kind] = counts_by_kind.get(child_result.kind, 0) + 1
+                created_count += 1 if child_result.created else 0
+                updated_count += 1 if child_result.updated else 0
+                synced += 1
+                decomposition_count += 1
+            if source.decomposition_mode == "newsletter_entries":
+                self._hide_stale_newsletter_children(
+                    source=source,
+                    parent_id=result.doc_id,
+                    active_external_keys=current_child_external_keys,
+                )
+            self._sync_source_live_progress(
+                run=run,
+                inputs_planned=len(entries),
+                inputs_processed=inputs_processed,
+                raw_docs_synced=synced,
+                created_count=created_count,
+                updated_count=updated_count,
+                decomposition_count=decomposition_count,
+            )
             self.runs.log(
                 run, self._format_raw_document_sync_log(source_name=source.name, result=result)
             )
         self._raise_if_stop_requested(run=run, source=source)
-        return synced, counts_by_kind, created_count, updated_count, 0
+        return synced, counts_by_kind, created_count, updated_count, decomposition_count
 
     def _sync_alphaxiv_source(
         self,
@@ -667,13 +1094,33 @@ class VaultFetchService:
         run,
         *,
         max_items: int,
+        alphaxiv_sort: AlphaXivSort | None = None,
     ) -> tuple[int, dict[str, int], int, int, int]:
         synced = 0
         created_count = 0
         updated_count = 0
         counts_by_kind: dict[str, int] = {}
+        entries = self._discover_website_entries(
+            source,
+            max_entries=max_items,
+            alphaxiv_sort=alphaxiv_sort,
+            run=run,
+        )
+        self._sync_source_live_progress(
+            run=run,
+            inputs_planned=len(entries),
+            inputs_processed=0,
+            raw_docs_synced=synced,
+            created_count=created_count,
+            updated_count=updated_count,
+            decomposition_count=0,
+        )
+        self.runs.log(
+            run,
+            f"{source.name}: discovered {len(entries)} source input{'s' if len(entries) != 1 else ''} to fetch.",
+        )
         self._raise_if_stop_requested(run=run, source=source)
-        for entry in self._discover_website_entries(source, max_entries=max_items, run=run):
+        for inputs_processed, entry in enumerate(entries, start=1):
             self._raise_if_stop_requested(run=run, source=source)
             try:
                 bundle = self.alphaxiv.fetch_paper(entry.link)
@@ -742,6 +1189,15 @@ class VaultFetchService:
             created_count += 1 if result.created else 0
             updated_count += 1 if result.updated else 0
             synced += 1
+            self._sync_source_live_progress(
+                run=run,
+                inputs_planned=len(entries),
+                inputs_processed=inputs_processed,
+                raw_docs_synced=synced,
+                created_count=created_count,
+                updated_count=updated_count,
+                decomposition_count=0,
+            )
             self.runs.log(
                 run, self._format_raw_document_sync_log(source_name=source.name, result=result)
             )
@@ -1112,8 +1568,21 @@ class VaultFetchService:
         updated_count = 0
         decomposition_count = 0
         counts_by_kind: dict[str, int] = {}
+        self._sync_source_live_progress(
+            run=run,
+            inputs_planned=len(messages),
+            inputs_processed=0,
+            raw_docs_synced=synced,
+            created_count=created_count,
+            updated_count=updated_count,
+            decomposition_count=decomposition_count,
+        )
+        self.runs.log(
+            run,
+            f"{source.name}: discovered {len(messages)} newsletter issue{'s' if len(messages) != 1 else ''} to fetch.",
+        )
         self._raise_if_stop_requested(run=run, source=source)
-        for message in messages:
+        for inputs_processed, message in enumerate(messages, start=1):
             self._raise_if_stop_requested(run=run, source=source)
             child_entries = (
                 self._extract_newsletter_entries(source, message)
@@ -1177,12 +1646,58 @@ class VaultFetchService:
                 parent_id=parent_result.doc_id,
                 active_external_keys=current_child_external_keys,
             )
+            self._sync_source_live_progress(
+                run=run,
+                inputs_planned=len(messages),
+                inputs_processed=inputs_processed,
+                raw_docs_synced=synced,
+                created_count=created_count,
+                updated_count=updated_count,
+                decomposition_count=decomposition_count,
+            )
             self.runs.log(run, f"{source.name}: fetched newsletter issue {parent_result.doc_id}.")
 
         self._raise_if_stop_requested(run=run, source=source)
         return synced, counts_by_kind, created_count, updated_count, decomposition_count
 
+    def _extract_website_entries(
+        self,
+        *,
+        source: VaultSourceDefinition,
+        entries: list[WebsiteEntry],
+        run,
+    ) -> list[ExtractedContent]:
+        if not entries:
+            return []
+
+        max_workers = min(WEBSITE_ENTRY_EXTRACTION_PARALLELISM, len(entries))
+        if max_workers <= 1:
+            return [self._extract_website_entry(entry) for entry in entries]
+
+        self.runs.log(
+            run,
+            f"{source.name}: extracting {len(entries)} source input"
+            f"{'' if len(entries) == 1 else 's'} with up to {max_workers} parallel worker"
+            f"{'' if max_workers == 1 else 's'}.",
+        )
+        extracted_entries: list[ExtractedContent | None] = [None] * len(entries)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_index = {
+                executor.submit(self._extract_website_entry, entry): index
+                for index, entry in enumerate(entries)
+            }
+            for future in as_completed(future_to_index):
+                self._raise_if_stop_requested(run=run, source=source)
+                extracted_entries[future_to_index[future]] = future.result()
+
+        if any(entry is None for entry in extracted_entries):
+            raise RuntimeError("Website extraction returned incomplete results.")
+        return [entry for entry in extracted_entries if entry is not None]
+
     def _extract_website_entry(self, entry: WebsiteEntry) -> ExtractedContent:
+        embedded = self._extract_embedded_website_entry(entry)
+        if embedded is not None:
+            return embedded
         try:
             return self.extractor.extract_from_url(entry.link)
         except Exception:
@@ -1196,16 +1711,41 @@ class VaultFetchService:
                 raw_payload={},
             )
 
+    def _extract_embedded_website_entry(self, entry: WebsiteEntry) -> ExtractedContent | None:
+        html = str(entry.content_html or "").strip()
+        if not html:
+            return None
+        try:
+            extracted = self.extractor.extract_from_html(html, url=entry.link)
+        except Exception:
+            return None
+        if not normalize_web_text(extracted.title) or extracted.title == entry.link:
+            extracted.title = entry.title or extracted.title
+
+        cleaned = normalize_web_text(extracted.cleaned_text) or ""
+        summary = normalize_web_text(entry.summary) or ""
+        if len(cleaned) >= 600:
+            return extracted
+        if summary and len(cleaned) >= len(summary) + 400:
+            return extracted
+        return None
+
     def _discover_website_entries(
         self,
         source: VaultSourceDefinition,
         *,
         max_entries: int | None = None,
+        alphaxiv_sort: AlphaXivSort | None = None,
         run=None,
     ) -> list[WebsiteEntry]:
         effective_max_entries = max_entries if max_entries is not None else source.max_items
         if source.custom_pipeline_id == "alphaxiv-paper":
-            return self._discover_alphaxiv_entries(source, max_entries=effective_max_entries, run=run)
+            return self._discover_alphaxiv_entries(
+                source,
+                max_entries=effective_max_entries,
+                alphaxiv_sort=alphaxiv_sort,
+                run=run,
+            )
         discovery_mode = str((source.config_json or {}).get("discovery_mode") or "").strip().lower()
         if discovery_mode == "website_index":
             return self._discover_entries_from_website_index(
@@ -1218,12 +1758,13 @@ class VaultFetchService:
         source: VaultSourceDefinition,
         *,
         max_entries: int,
+        alphaxiv_sort: AlphaXivSort | None = None,
         run=None,
     ) -> list[WebsiteEntry]:
         if max_entries <= 0:
             return []
 
-        search_settings = self._load_alphaxiv_search_settings()
+        search_settings = self._load_alphaxiv_search_settings(sort_override=alphaxiv_sort)
         page_size = min(ALPHAXIV_DISCOVERY_PAGE_SIZE, max_entries)
         max_pages = max(1, ((max_entries - 1) // page_size) + 3)
         entries: list[WebsiteEntry] = []
@@ -1265,7 +1806,11 @@ class VaultFetchService:
 
         return entries
 
-    def _load_alphaxiv_search_settings(self) -> AlphaXivSearchSettings:
+    def _load_alphaxiv_search_settings(
+        self,
+        *,
+        sort_override: AlphaXivSort | None = None,
+    ) -> AlphaXivSearchSettings:
         profile = load_profile_snapshot()
         raw_settings = getattr(profile, "alphaxiv_search_settings", None)
         if hasattr(raw_settings, "model_dump"):
@@ -1280,7 +1825,10 @@ class VaultFetchService:
                 "interval": getattr(raw_settings, "interval", None),
                 "source": getattr(raw_settings, "source", None),
             }
-        return AlphaXivSearchSettings.model_validate(payload)
+        settings = AlphaXivSearchSettings.model_validate(payload)
+        if sort_override is not None:
+            return settings.model_copy(update={"sort": sort_override})
+        return settings
 
     def _discover_entries_from_feed(
         self,
@@ -1318,17 +1866,30 @@ class VaultFetchService:
             summary = normalize_web_text(
                 getattr(entry, "summary", None) or getattr(entry, "description", None)
             )
+            content_html = self._feed_entry_content_html(entry)
             entries.append(
                 WebsiteEntry(
                     link=link,
                     title=title,
                     published_at=published_at,
                     summary=summary,
+                    content_html=content_html,
                 )
             )
             if len(entries) >= max_entries:
                 break
         return entries
+
+    def _feed_entry_content_html(self, entry) -> str | None:
+        raw_content = getattr(entry, "content", None) or []
+        if not isinstance(raw_content, list):
+            raw_content = [raw_content]
+        for candidate in raw_content:
+            value = candidate.get("value") if isinstance(candidate, dict) else getattr(candidate, "value", None)
+            text = str(value or "").strip()
+            if text:
+                return text
+        return None
 
     def _discover_entries_from_website_index(
         self,
@@ -1390,6 +1951,7 @@ class VaultFetchService:
             title=incoming.title or existing.title,
             published_at=incoming.published_at or existing.published_at,
             summary=incoming.summary or existing.summary,
+            content_html=incoming.content_html or existing.content_html,
         )
 
     def _discover_structured_website_index_entries(
@@ -1619,7 +2181,18 @@ class VaultFetchService:
         message: NewsletterMessage,
         sections: list[ParsedNewsletterSection],
     ) -> str:
-        lines = [f"# {message.subject.strip() or 'Newsletter'}"]
+        return self._render_structured_issue_body(
+            title=message.subject.strip() or "Newsletter",
+            sections=sections,
+        )
+
+    def _render_structured_issue_body(
+        self,
+        *,
+        title: str,
+        sections: list[ParsedNewsletterSection],
+    ) -> str:
+        lines = [f"# {title}"]
         for section in sections:
             if not section.stories:
                 continue
@@ -1630,6 +2203,33 @@ class VaultFetchService:
                 if story.summary:
                     lines.extend(["", story.summary])
         return "\n".join(lines).strip() + "\n"
+
+    def _render_website_newsletter_body(
+        self,
+        *,
+        entry: WebsiteEntry,
+        stories: list[NewsletterEntry],
+    ) -> str:
+        lines = [f"# {entry.title.strip() or 'Newsletter'}"]
+        lines.extend(["", f"Source issue: {resolve_external_url(entry.link)}"])
+        if entry.published_at is not None:
+            lines.append(f"Published At: {entry.published_at.isoformat()}")
+        lines.extend(["", "## Stories"])
+        for story in stories:
+            story_title = f"[{story.title}]({story.link})" if story.link else story.title
+            lines.extend(["", f"### {story_title}"])
+            context = self._extract_issue_context_from_entry_body(story.body)
+            if context:
+                lines.extend(["", context])
+        return "\n".join(lines).strip() + "\n"
+
+    @staticmethod
+    def _extract_issue_context_from_entry_body(body: str) -> str:
+        marker = "## Newsletter Context"
+        if marker not in body:
+            return ""
+        _, _, remainder = body.partition(marker)
+        return remainder.strip()
 
     def _render_newsletter_entry_body(
         self,
@@ -1649,7 +2249,7 @@ class VaultFetchService:
         if message.published_at is not None:
             lines.append(f"Published At: {message.published_at.isoformat()}")
         if link:
-            lines.append(f"Canonical URL: {link}")
+            lines.append(f"Canonical URL: {resolve_external_url(link)}")
         if context:
             lines.extend(["", "## Newsletter Context", "", context])
         return "\n".join(lines).strip() + "\n"
@@ -1740,6 +2340,248 @@ class VaultFetchService:
             )
         return entries
 
+    def _extract_website_newsletter_entries(
+        self,
+        source: VaultSourceDefinition,
+        entry: WebsiteEntry,
+        extracted: ExtractedContent,
+    ) -> list[NewsletterEntry]:
+        stories = self._parse_website_newsletter_stories(source, entry, extracted)
+        if not stories:
+            return []
+
+        entries: list[NewsletterEntry] = []
+        seen: set[str] = set()
+        issue_key = normalize_url(entry.link)
+        for ordinal, story in enumerate(stories[:NEWSLETTER_ENTRY_LIMIT], start=1):
+            dedupe_key = story.link or story.title.casefold()
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            kind = self._resolve_raw_kind(
+                source=source,
+                source_url=story.link,
+                title=story.title,
+            )
+            suffix = story.link or f"{story.title}::{ordinal}"
+            external_key = f"{issue_key}::story::{ordinal}:{suffix}"
+            entries.append(
+                NewsletterEntry(
+                    title=story.title,
+                    link=story.link,
+                    body=self._render_website_newsletter_entry_body(
+                        entry=entry,
+                        title=story.title,
+                        link=story.link,
+                        context=story.summary,
+                    ),
+                    external_key=external_key,
+                    kind=kind,
+                    asset_map={},
+                )
+            )
+        return entries
+
+    def _parse_website_newsletter_stories(
+        self,
+        source: VaultSourceDefinition,
+        entry: WebsiteEntry,
+        extracted: ExtractedContent,
+    ) -> list[ParsedNewsletterStory]:
+        config = source.config_json if isinstance(source.config_json, dict) else {}
+        parser_name = str(config.get("newsletter_parser") or "").strip().lower()
+        html_candidates: list[str] = []
+        raw_payload = extracted.raw_payload if isinstance(extracted.raw_payload, dict) else {}
+        raw_html = raw_payload.get("html")
+        if isinstance(raw_html, str) and raw_html.strip():
+            html_candidates.append(raw_html)
+        if entry.content_html and entry.content_html.strip():
+            html_candidates.append(entry.content_html)
+        for html in html_candidates:
+            if parser_name == "jack_clark_import_ai":
+                stories = self._parse_jack_clark_newsletter_stories(
+                    html=html,
+                    issue_url=entry.link,
+                )
+                if stories:
+                    return stories
+        return []
+
+    def _parse_jack_clark_newsletter_stories(
+        self,
+        *,
+        html: str,
+        issue_url: str,
+    ) -> list[ParsedNewsletterStory]:
+        payload = str(html or "").strip()
+        if not payload:
+            return []
+
+        soup = BeautifulSoup(payload, "html.parser")
+        root = soup.select_one("div.entry-content") or soup
+        blocks: list[list[Any]] = []
+        current: list[Any] = []
+
+        for child in root.children:
+            tag_name = getattr(child, "name", None)
+            if tag_name is None:
+                continue
+            if tag_name in {"script", "style", "img", "figure", "iframe"}:
+                continue
+
+            text = normalize_web_text(child) or ""
+            if not text:
+                continue
+            if JACK_CLARK_FOOTER_RE.match(text):
+                break
+            if tag_name == "p" and JACK_CLARK_SEPARATOR_RE.fullmatch(text):
+                if current:
+                    blocks.append(current)
+                    current = []
+                continue
+            if not current and self._is_jack_clark_noise_block_element(child, text):
+                continue
+            current.append(child)
+
+        if current:
+            blocks.append(current)
+
+        stories: list[ParsedNewsletterStory] = []
+        for block in blocks:
+            story = self._build_jack_clark_story(block, issue_url=issue_url)
+            if story is not None:
+                stories.append(story)
+        return stories
+
+    def _is_jack_clark_noise_block_element(self, element, text: str) -> bool:
+        classes = {
+            str(value or "").strip().casefold()
+            for value in (element.get("class") or [])
+            if str(value or "").strip()
+        }
+        if "button-wrapper" in classes:
+            return True
+        lowered = text.casefold()
+        if JACK_CLARK_INTRO_RE.match(text):
+            return True
+        return lowered in {"subscribe now", "thanks for reading!"}
+
+    def _build_jack_clark_story(
+        self,
+        block: list[Any],
+        *,
+        issue_url: str,
+    ) -> ParsedNewsletterStory | None:
+        first_paragraph = next(
+            (
+                element
+                for element in block
+                if getattr(element, "name", None) == "p"
+                and (normalize_web_text(element) or "")
+            ),
+            None,
+        )
+        if first_paragraph is None:
+            return None
+
+        title = normalize_web_text(first_paragraph.find("strong")) or ""
+        title = re.sub(r"[:\s]+$", "", title).strip()
+        if not title:
+            return None
+        if title.casefold() in JACK_CLARK_STOP_TITLES:
+            return None
+
+        summary = self._render_jack_clark_story_context(block, title=title)
+        if not summary:
+            return None
+
+        return ParsedNewsletterStory(
+            section="Stories",
+            title=title,
+            link=self._select_jack_clark_story_link(block, issue_url=issue_url),
+            summary=summary,
+        )
+
+    def _render_jack_clark_story_context(
+        self,
+        block: list[Any],
+        *,
+        title: str,
+    ) -> str:
+        lines: list[str] = []
+        first_paragraph_seen = False
+        for element in block:
+            tag_name = getattr(element, "name", None)
+            if tag_name == "p":
+                text = normalize_web_text(element) or ""
+                if not text:
+                    continue
+                if not first_paragraph_seen:
+                    first_paragraph_seen = True
+                    text = self._strip_story_title_prefix(text=text, title=title)
+                if text:
+                    lines.append(text)
+                continue
+            if tag_name in {"ul", "ol"}:
+                bullets = [
+                    f"- {item}"
+                    for item in (
+                        normalize_web_text(candidate)
+                        for candidate in element.find_all("li")
+                    )
+                    if item
+                ]
+                if bullets:
+                    lines.append("\n".join(bullets))
+        return "\n\n".join(lines).strip()
+
+    @staticmethod
+    def _strip_story_title_prefix(*, text: str, title: str) -> str:
+        pattern = rf"^{re.escape(title)}\s*(?::|[-–—])?\s*"
+        return re.sub(pattern, "", text, count=1, flags=re.IGNORECASE).strip()
+
+    def _select_jack_clark_story_link(
+        self,
+        block: list[Any],
+        *,
+        issue_url: str,
+    ) -> str | None:
+        normalized_issue_url = normalize_url(issue_url)
+        for element in block:
+            for anchor in element.find_all("a", href=True):
+                href = normalize_url(str(anchor.get("href") or "").strip())
+                if not href.startswith(("http://", "https://")):
+                    continue
+                if href == normalized_issue_url:
+                    continue
+                hostname = (urlparse(href).hostname or "").casefold()
+                if hostname in JACK_CLARK_HOSTS or hostname in JACK_CLARK_NOISE_HOSTS:
+                    continue
+                return href
+        return None
+
+    def _render_website_newsletter_entry_body(
+        self,
+        *,
+        entry: WebsiteEntry,
+        title: str,
+        link: str | None,
+        context: str,
+    ) -> str:
+        lines = [
+            f"# {title}",
+            "",
+            f"Source newsletter: {entry.title.strip() or 'Newsletter'}",
+            f"Source issue: {resolve_external_url(entry.link)}",
+        ]
+        if entry.published_at is not None:
+            lines.append(f"Published At: {entry.published_at.isoformat()}")
+        if link:
+            lines.append(f"Canonical URL: {resolve_external_url(link)}")
+        if context:
+            lines.extend(["", "## Newsletter Context", "", context])
+        return "\n".join(lines).strip() + "\n"
+
     def _parse_newsletter_sections(
         self,
         source: VaultSourceDefinition,
@@ -1749,6 +2591,8 @@ class VaultFetchService:
             return self._parse_tldr_newsletter_sections(message)
         if source.id == "medium-email":
             return self._parse_medium_newsletter_sections(message)
+        if source.id == "alphasignal-email":
+            return self._parse_alphasignal_newsletter_sections(message)
         return []
 
     def _parse_tldr_newsletter_sections(
@@ -1894,6 +2738,235 @@ class VaultFetchService:
                 )
             )
         return stories
+
+    def _parse_alphasignal_newsletter_sections(
+        self, message: NewsletterMessage
+    ) -> list[ParsedNewsletterSection]:
+        if not message.html_body.strip():
+            return []
+
+        soup = BeautifulSoup(message.html_body, "html.parser")
+        grouped: dict[str, list[ParsedNewsletterStory]] = {}
+        section_order: list[str] = []
+        for table in soup.find_all("table"):
+            section_title = self._extract_alphasignal_table_section_title(table)
+            if not section_title:
+                continue
+
+            lowered = section_title.casefold()
+            if lowered.startswith("top "):
+                story = self._parse_alphasignal_feature_story(table, section_title)
+                if story is not None:
+                    self._append_parsed_section_story(
+                        grouped=grouped,
+                        section_order=section_order,
+                        story=story,
+                    )
+                continue
+
+            if lowered == "signals":
+                for story in self._parse_alphasignal_signal_stories(table, section_title):
+                    self._append_parsed_section_story(
+                        grouped=grouped,
+                        section_order=section_order,
+                        story=story,
+                    )
+
+        return [
+            ParsedNewsletterSection(title=title, stories=grouped[title])
+            for title in section_order
+            if grouped.get(title)
+        ]
+
+    @staticmethod
+    def _append_parsed_section_story(
+        *,
+        grouped: dict[str, list[ParsedNewsletterStory]],
+        section_order: list[str],
+        story: ParsedNewsletterStory,
+    ) -> None:
+        if story.section not in grouped:
+            grouped[story.section] = []
+            section_order.append(story.section)
+        grouped[story.section].append(story)
+
+    @staticmethod
+    def _table_direct_rows(table) -> list:
+        container = table.find("tbody", recursive=False) or table
+        return container.find_all("tr", recursive=False)
+
+    @staticmethod
+    def _row_direct_cells(row) -> list:
+        return row.find_all("td", recursive=False)
+
+    def _extract_alphasignal_table_section_title(self, table) -> str | None:
+        rows = self._table_direct_rows(table)
+        if not rows:
+            return None
+        cells = self._row_direct_cells(rows[0])
+        if not cells:
+            return None
+        return normalize_web_text(cells[0])
+
+    def _parse_alphasignal_feature_story(
+        self,
+        table,
+        section_title: str,
+    ) -> ParsedNewsletterStory | None:
+        rows = self._table_direct_rows(table)
+        headline = ""
+        headline_index = -1
+        for index, row in enumerate(rows):
+            for cell in self._row_direct_cells(row):
+                text = normalize_web_text(cell) or ""
+                classes = {str(value).strip() for value in (cell.get("class") or [])}
+                if not text or text.casefold() == section_title.casefold():
+                    continue
+                if "h1" not in classes:
+                    continue
+                headline = text
+                headline_index = index
+                break
+            if headline:
+                break
+
+        if not headline:
+            return None
+
+        metric = ""
+        for row in rows[headline_index + 1 :]:
+            cells = self._row_direct_cells(row)
+            if not cells:
+                continue
+            candidate = normalize_web_text(cells[0]) or ""
+            if self._is_alphasignal_metric(candidate):
+                metric = candidate
+                break
+            if candidate and len(candidate) > 40:
+                break
+
+        body_cell = None
+        for row in rows[headline_index + 1 :]:
+            for cell in self._row_direct_cells(row):
+                if cell.find(["p", "ul", "ol"]) is None:
+                    continue
+                if not normalize_web_text(cell):
+                    continue
+                body_cell = cell
+                break
+            if body_cell is not None:
+                break
+
+        link = self._select_alphasignal_story_link(table)
+        summary = self._render_alphasignal_feature_summary(body_cell, metric=metric)
+        if self._is_alphasignal_sponsor_story(title=headline, detail=metric or summary):
+            return None
+        return ParsedNewsletterStory(
+            section=section_title,
+            title=headline,
+            link=link,
+            summary=summary,
+        )
+
+    def _parse_alphasignal_signal_stories(
+        self,
+        table,
+        section_title: str,
+    ) -> list[ParsedNewsletterStory]:
+        stories: list[ParsedNewsletterStory] = []
+        seen: set[str] = set()
+        for anchor in table.find_all("a", href=True):
+            classes = {str(value).strip() for value in (anchor.get("class") or [])}
+            if "h1" not in classes:
+                continue
+
+            title = normalize_web_text(anchor) or ""
+            if not title:
+                continue
+            detail = normalize_web_text(anchor.find_next_sibling("span")) or ""
+            if self._is_alphasignal_sponsor_story(title=title, detail=detail):
+                continue
+
+            link = normalize_url(str(anchor.get("href") or "").strip()) or None
+            dedupe_key = link or title.casefold()
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+
+            stories.append(
+                ParsedNewsletterStory(
+                    section=section_title,
+                    title=title,
+                    link=link,
+                    summary=f"> {detail}" if detail else "",
+                )
+            )
+        return stories
+
+    def _select_alphasignal_story_link(self, table) -> str | None:
+        links: list[str] = []
+        for anchor in table.find_all("a", href=True):
+            href = normalize_url(str(anchor.get("href") or "").strip())
+            text = normalize_web_text(anchor) or normalize_web_text(anchor.find("img", alt=True)) or ""
+            if not href or not text:
+                continue
+            if any(noise in text.casefold() for noise in NEWSLETTER_NOISE_TEXT):
+                continue
+            links.append(href)
+        return links[-1] if links else None
+
+    def _render_alphasignal_feature_summary(self, container, *, metric: str) -> str:
+        blocks: list[str] = []
+        if metric:
+            blocks.append(f"> {metric}")
+
+        if container is None:
+            return "\n\n".join(blocks).strip()
+
+        root = container.find("div", recursive=False) or container
+        rendered_blocks: list[str] = []
+        for child in root.children:
+            tag_name = getattr(child, "name", None)
+            if tag_name is None:
+                continue
+            if tag_name == "p":
+                text = normalize_web_text(child) or ""
+                if not text:
+                    continue
+                strong = child.find("strong")
+                strong_text = normalize_web_text(strong) if strong is not None else ""
+                rendered_blocks.append(f"**{text}**" if strong_text and strong_text == text else text)
+                continue
+            if tag_name in {"ul", "ol"}:
+                items = [
+                    f"- {item}"
+                    for li in child.find_all("li", recursive=False)
+                    if (item := normalize_web_text(li))
+                ]
+                if items:
+                    rendered_blocks.append("\n".join(items))
+
+        if not rendered_blocks:
+            fallback = normalize_web_text(root)
+            if fallback:
+                rendered_blocks.append(fallback)
+
+        blocks.extend(rendered_blocks)
+        return "\n\n".join(blocks).strip()
+
+    @staticmethod
+    def _is_alphasignal_metric(text: str) -> bool:
+        candidate = text.strip()
+        return bool(ALPHASIGNAL_METRIC_RE.fullmatch(candidate) or ALPHASIGNAL_SPONSOR_RE.match(candidate))
+
+    def _is_alphasignal_sponsor_story(self, *, title: str, detail: str) -> bool:
+        lowered_title = title.casefold()
+        lowered_detail = detail.casefold()
+        if any(noise in lowered_title for noise in NEWSLETTER_NOISE_TEXT):
+            return True
+        if any(noise in lowered_detail for noise in NEWSLETTER_NOISE_TEXT):
+            return True
+        return bool(ALPHASIGNAL_SPONSOR_RE.match(detail.strip()))
 
     @staticmethod
     def _is_medium_story_link(link: str | None) -> bool:
@@ -2138,7 +3211,9 @@ class VaultFetchService:
             *(existing_frontmatter.authors if existing_frontmatter else []), *authors
         )
         merged_tags = merge_unique_strings(
-            *(existing_frontmatter.tags if existing_frontmatter else []), *tags
+            *(existing_frontmatter.tags if existing_frontmatter else []),
+            *tags,
+            *([SUB_DOCUMENT_TAG] if doc_role == "derived" else []),
         )
         raw_title = title.strip() or (existing_frontmatter.title if existing_frontmatter else doc_id)
         resolved_title = normalize_whitespace(

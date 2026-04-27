@@ -4,13 +4,13 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
-from app.db.models import DataMode
+from app.db.models import ContentType, DataMode, ScoreBucket
 from app.schemas.briefs import DigestEntryRead, DigestRead
 from app.services.brief_dates import coverage_day_for_edition, iso_week_end, iso_week_start
 from app.services.vault_briefs import VaultBriefService
-from app.services.vault_ingestion import VaultIngestionService
+from app.services.vault_ingestion import VaultIndexService, VaultIngestionService
 from app.services.vault_runtime import content_hash, to_item_list_entry
-from app.vault.models import LightweightJudgeScore, RawDocumentFrontmatter
+from app.vault.models import LightweightJudgeScore, RawDocumentFrontmatter, VaultItemRecord
 from app.vault.store import VaultStore
 
 
@@ -242,6 +242,94 @@ def test_rebuilt_vault_scores_drive_daily_brief_priority(
     assert digest.status_code == 200
     shortlist_ids = [entry["item"]["id"] for entry in digest.json()["editorial_shortlist"]]
     assert shortlist_ids[0] == "high-score-older-item"
+
+
+def test_model_judge_archive_bucket_caps_trend_heavy_item(
+    monkeypatch,
+) -> None:
+    profile = type(
+        "ProfileSnapshot",
+        (),
+        {
+            "favorite_topics": ["reasoning", "benchmark", "openai", "fellowship"],
+            "favorite_authors": [],
+            "favorite_sources": [],
+            "ignored_topics": [],
+            "ranking_weights": {
+                "relevance": 0.2,
+                "novelty": 0.4,
+                "source_quality": 0.15,
+                "author_match": 0.05,
+                "topic_match": 0.2,
+                "zotero_affinity": 0.0,
+            },
+            "ranking_thresholds": {
+                "must_read_min": 0.72,
+                "worth_a_skim_min": 0.45,
+            },
+        },
+    )()
+    monkeypatch.setattr("app.services.vault_ingestion.load_profile_snapshot", lambda: profile)
+
+    now = datetime(2026, 4, 9, 9, 0, tzinfo=UTC)
+    item = VaultItemRecord(
+        id="trend-heavy-benchmark-note",
+        kind="article",
+        title="OpenAI fellowship benchmark update",
+        source_id="example-feed",
+        source_name="Example Feed",
+        organization_name=None,
+        authors=["Example Writer"],
+        published_at=now,
+        ingested_at=now,
+        fetched_at=now,
+        canonical_url="https://example.com/openai-fellowship-benchmark",
+        content_type=ContentType.ARTICLE,
+        extraction_confidence=0.9,
+        cleaned_text=(
+            "A benchmark roundup for reasoning models. The post also announces an OpenAI "
+            "fellowship and summarizes recent leaderboard movement."
+        ),
+        outbound_links=[],
+        tags=["reasoning", "benchmark", "openai", "fellowship"],
+        status="active",
+        asset_paths=[],
+        content_hash=content_hash(
+            "OpenAI fellowship benchmark update",
+            "benchmark roundup with fellowship announcement",
+        ),
+        identity_hash=None,
+        raw_doc_path="raw/article/trend-heavy-benchmark-note/source.md",
+        doc_role="primary",
+        parent_id=None,
+        index_visibility="visible",
+        short_summary="A benchmark roundup with an attached fellowship announcement.",
+        lightweight_enrichment_status="succeeded",
+        lightweight_enriched_at=now,
+        lightweight_enrichment_model="gemma4:e2b",
+        topic_refs=[],
+        trend_score=1.0,
+        novelty_score=1.0,
+        lightweight_scoring_model="gemma4:e2b",
+        lightweight_score=LightweightJudgeScore(
+            relevance_score=0.32,
+            source_fit_score=0.28,
+            topic_fit_score=0.3,
+            author_fit_score=0.05,
+            evidence_fit_score=0.55,
+            confidence_score=0.92,
+            bucket_hint="archive",
+            reason="Broad benchmark chatter with low direct research fit.",
+            evidence_quotes=["benchmark roundup"],
+        ),
+        updated_at=now,
+    )
+
+    scored = VaultIndexService(ensure_layout=False)._score_items([item])[0]
+
+    assert scored.score.bucket == ScoreBucket.ARCHIVE
+    assert scored.score.total_score < 0.45
+    assert scored.score.reason_trace["judge_bucket_cap_applied"] == "archive"
 
 
 def test_daily_brief_filters_to_previous_local_coverage_day(

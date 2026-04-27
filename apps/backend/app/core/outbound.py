@@ -94,10 +94,15 @@ def fetch_safe_response(
     timeout: float,
     headers: dict[str, str] | None = None,
     max_redirects: int = SAFE_REDIRECT_LIMIT,
+    allow_insecure_tls: bool = False,
 ) -> httpx.Response:
     current_url = validate_outbound_url(url)
     request_headers = headers or {}
-    with httpx.Client(follow_redirects=False, timeout=timeout) as client:
+    with httpx.Client(
+        follow_redirects=False,
+        timeout=timeout,
+        verify=not allow_insecure_tls,
+    ) as client:
         for redirect_count in range(max_redirects + 1):
             response = client.get(current_url, headers=request_headers)
             response.read()

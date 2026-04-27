@@ -68,6 +68,13 @@ def test_relative_vault_and_local_state_paths_resolve_from_repo_root() -> None:
     assert settings.local_state_dir.parts[-3:] == ("apps", "backend", ".local-state")
 
 
+def test_relative_sqlite_database_url_resolves_from_repo_root() -> None:
+    settings = Settings(_env_file=None, database_url="sqlite+pysqlite:///./research_center.db")
+
+    assert settings.database_url.startswith("sqlite+pysqlite:////")
+    assert settings.database_url.endswith("/research-center/research_center.db")
+
+
 def test_blank_optional_env_values_are_treated_as_unset(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(

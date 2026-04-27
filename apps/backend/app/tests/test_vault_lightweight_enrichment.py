@@ -974,6 +974,112 @@ def test_lightweight_enrichment_publishes_live_run_counts_while_running(
     assert [snapshot[3] for snapshot in success_snapshots] == [0, 0]
 
 
+def test_lightweight_enrichment_splits_metadata_and_scoring_backlogs_by_hash(
+    client,
+    monkeypatch,
+) -> None:
+    del client
+    frontmatter = _seed_article_document(
+        doc_id="2026-04-08-example-phase-split-article",
+        title="Phase split hashing for lightweight refresh",
+    )
+    service = VaultLightweightEnrichmentService()
+
+    monkeypatch.setattr(
+        "app.services.vault_lightweight_enrichment.load_profile_snapshot",
+        lambda: type(
+            "ProfileSnapshot",
+            (),
+            {
+                "favorite_topics": ["verifier routing"],
+                "favorite_authors": [],
+                "favorite_sources": ["Example Research"],
+                "ignored_topics": [],
+                "prompt_guidance": type("PromptGuidance", (), {"enrichment": ""})(),
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        LLMClient,
+        "ollama_status",
+        lambda self: {
+            "available": True,
+            "model": "gemma4:e2b",
+            "detail": "ready",
+        },
+    )
+
+    metadata_calls = {"count": 0}
+    score_calls = {"count": 0}
+
+    def _metadata(self, item, text):
+        del self, text
+        metadata_calls["count"] += 1
+        return {
+            "short_summary": f"Summary for {item['title']}",
+            "authors": ["Casey Researcher"],
+            "tags": ["verifier routing", "triage"],
+            "model": "gemma4:e2b",
+        }
+
+    def _score(self, item, text, *, profile, source_context=None):
+        del self, item, text, profile, source_context
+        score_calls["count"] += 1
+        return _fake_score_payload(relevance_score=0.91)
+
+    monkeypatch.setattr(LLMClient, "lightweight_enrich_raw_document", _metadata)
+    monkeypatch.setattr(LLMClient, "judge_lightweight_document", _score)
+
+    metadata_run = service.enrich_stale_documents(doc_id=frontmatter.id, phase="metadata")
+    after_metadata = VaultStore().read_raw_document_relative(
+        f"raw/article/{frontmatter.id}/source.md"
+    )
+
+    assert metadata_run.status == "succeeded"
+    assert metadata_calls["count"] == 1
+    assert score_calls["count"] == 0
+    assert after_metadata is not None
+    assert after_metadata.frontmatter.lightweight_enrichment_input_hash is not None
+    assert after_metadata.frontmatter.lightweight_scoring_input_hash is None
+    assert after_metadata.frontmatter.lightweight_score is None
+    assert service.count_metadata_pending_documents(doc_id=frontmatter.id) == 0
+    assert service.count_scoring_pending_documents(doc_id=frontmatter.id) == 1
+
+    monkeypatch.setattr(
+        LLMClient,
+        "lightweight_enrich_raw_document",
+        lambda self, item, text: (_ for _ in ()).throw(
+            AssertionError("Scoring-only refresh should not rerun metadata enrichment.")
+        ),
+    )
+
+    scoring_run = service.enrich_stale_documents(doc_id=frontmatter.id, phase="scoring")
+    after_scoring = VaultStore().read_raw_document_relative(
+        f"raw/article/{frontmatter.id}/source.md"
+    )
+
+    assert scoring_run.status == "succeeded"
+    assert score_calls["count"] == 1
+    assert after_scoring is not None
+    assert after_scoring.frontmatter.lightweight_scoring_input_hash is not None
+    assert after_scoring.frontmatter.lightweight_score is not None
+    assert service.count_metadata_pending_documents(doc_id=frontmatter.id) == 0
+    assert service.count_scoring_pending_documents(doc_id=frontmatter.id) == 0
+
+    stale_metadata = after_scoring.frontmatter.model_copy(
+        update={"lightweight_enrichment_input_hash": "stale-metadata-hash"}
+    )
+    VaultStore().write_raw_document(
+        kind=stale_metadata.kind,
+        doc_id=stale_metadata.id,
+        frontmatter=stale_metadata,
+        body=after_scoring.body,
+    )
+
+    assert service.count_metadata_pending_documents(doc_id=frontmatter.id) == 1
+    assert service.count_scoring_pending_documents(doc_id=frontmatter.id) == 0
+
+
 def test_lightweight_enrichment_emits_detailed_run_logs(
     client,
     monkeypatch,

@@ -197,6 +197,29 @@ DEFAULT_SOURCE_SPECS: tuple[SourceSpec, ...] = (
         config_json={"website_url": "https://bair.berkeley.edu/blog/"},
     ),
     SourceSpec(
+        aliases=("The Batch Research",),
+        source_type=SourceType.RSS,
+        name="The Batch Research",
+        url="https://www.deeplearning.ai/the-batch/tag/research/",
+        query=None,
+        description=(
+            "DeepLearning.AI The Batch posts tagged for machine learning research."
+        ),
+        priority=79,
+        tags=("rss", "ai", "research", "official"),
+        config_json={
+            "website_url": "https://www.deeplearning.ai/the-batch/tag/research/",
+            "discovery_mode": "website_index",
+            "allowed_hosts": ["www.deeplearning.ai", "deeplearning.ai"],
+            "article_path_prefixes": ["/the-batch/"],
+            "exclude_patterns": [
+                r"^/the-batch/?$",
+                r"^/the-batch/about/?$",
+                r"^/the-batch/tag/",
+            ],
+        },
+    ),
+    SourceSpec(
         aliases=("Interconnects AI",),
         source_type=SourceType.RSS,
         name="Interconnects AI",
@@ -283,6 +306,17 @@ DEFAULT_SOURCE_SPECS: tuple[SourceSpec, ...] = (
         description="Medium newsletter with recent popular medium articles.",
         priority=66,
         tags=("newsletter", "ai", "medium", "briefing"),
+        rules=(RuleSpec(rule_type="label", value="tldr-ai"),),
+    ),
+    SourceSpec(
+        aliases=("AlphaSignal", "Alpha Signal"),
+        source_type=SourceType.GMAIL,
+        name="AlphaSignal",
+        url=None,
+        query="from:news@alphasignal.ai",
+        description="AlphaSignal daily AI newsletter.",
+        priority=66,
+        tags=("newsletter", "ai", "alphasignal", "briefing"),
         rules=(RuleSpec(rule_type="label", value="tldr-ai"),),
     ),
     SourceSpec(

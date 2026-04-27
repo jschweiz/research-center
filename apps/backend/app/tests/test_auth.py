@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
 from app.db.session import reset_engine_cache
+from app.services.local_control import LocalControlService
 
 
 def test_login_and_me(client: TestClient) -> None:
@@ -244,3 +245,38 @@ def test_zotero_connection_refresh_get_requires_frontend_origin_in_production(
             headers={"referer": "https://frontend.example.com/connections"},
         )
         assert allowed.status_code != 403
+
+
+def test_local_control_post_is_not_blocked_by_frontend_origin_check_in_production(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _production_client(tmp_path, monkeypatch) as client:
+        monkeypatch.setattr(
+            "app.services.vault_lightweight_enrichment.VaultLightweightEnrichmentService.enrich_stale_documents",
+            lambda self, *args, **kwargs: None,
+        )
+        pairing = LocalControlService().create_pairing_code(label="Lab iPad")
+        redeem = client.post(
+            "/api/local-control/pair/redeem",
+            json={"pairing_token": pairing.pairing_token},
+        )
+        assert redeem.status_code == 200
+        token = redeem.json()["access_token"]
+
+        response = client.post(
+            "/api/local-control/documents/import-page",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "url": "https://example.com/articles/local-origin-check",
+                "page_title": "Local origin check",
+                "content_text": (
+                    "Local origin check title\n\n"
+                    "This payload is long enough to avoid the thin-capture fallback and prove that "
+                    "paired local-control POST requests still work in production mode without a "
+                    "frontend origin header."
+                ),
+            },
+        )
+
+        assert response.status_code == 201

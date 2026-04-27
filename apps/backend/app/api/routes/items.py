@@ -9,6 +9,7 @@ from app.schemas.items import (
     ManualImportRequest,
 )
 from app.services.items import ItemService
+from app.services.vault_items import ItemSummaryImportError
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
@@ -44,6 +45,16 @@ def import_url(payload: ManualImportRequest) -> ItemDetailRead:
         return ItemService().import_url(str(payload.url))
     except UnsafeOutboundUrlError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/import-url-with-summary", response_model=ItemDetailRead, status_code=status.HTTP_201_CREATED)
+def import_url_with_summary(payload: ManualImportRequest) -> ItemDetailRead:
+    try:
+        return ItemService().import_url_with_summary(str(payload.url))
+    except UnsafeOutboundUrlError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except ItemSummaryImportError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
 @router.post("/{item_id}/archive", response_model=ActionRead)

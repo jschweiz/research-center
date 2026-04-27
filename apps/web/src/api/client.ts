@@ -1,5 +1,6 @@
 import type {
   ActionResponse,
+  AlphaXivSort,
   AdvancedOutputKind,
   AudioBrief,
   BriefAvailability,
@@ -146,6 +147,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ url }),
     }),
+  importUrlWithSummary: (url: string) =>
+    request<ItemDetail>("/items/import-url-with-summary", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
   archiveItem: (id: string) => request<ActionResponse>(`/items/${id}/archive`, { method: "POST" }),
   starItem: (id: string) => request<ActionResponse>(`/items/${id}/star`, { method: "POST" }),
 
@@ -158,7 +164,7 @@ export const api = {
   createSource: (payload: Record<string, unknown>) =>
     request<Source>("/sources", { method: "POST", body: JSON.stringify(payload) }),
   probeSource: (id: string) => request<SourceProbeResult>(`/sources/${id}/probe`, { method: "POST" }),
-  injectSource: (id: string, payload?: { max_items?: number }) =>
+  injectSource: (id: string, payload?: { max_items?: number; alphaxiv_sort?: AlphaXivSort }) =>
     request<JobResponse>(`/sources/${id}/inject`, {
       method: "POST",
       body: JSON.stringify(payload ?? {}),

@@ -113,6 +113,11 @@ def _is_origin_protected_get_path(path: str, *, api_prefix: str) -> bool:
     return False
 
 
+def _is_local_control_api_path(path: str, *, api_prefix: str) -> bool:
+    local_control_prefix = f"{api_prefix}/local-control"
+    return path == local_control_prefix or path.startswith(f"{local_control_prefix}/")
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings)
@@ -196,7 +201,10 @@ def create_app() -> FastAPI:
                 request.url.path,
                 api_prefix=settings.api_prefix,
             )
-            if settings.is_production and (
+            if settings.is_production and not _is_local_control_api_path(
+                request.url.path,
+                api_prefix=settings.api_prefix,
+            ) and (
                 request.method.upper() in UNSAFE_HTTP_METHODS or protected_get
             ):
                 allowed_origin = settings.frontend_origin.rstrip("/")

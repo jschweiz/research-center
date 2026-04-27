@@ -20,6 +20,11 @@ export interface MeResponse {
   authenticated: boolean;
 }
 
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+}
+
 export interface ItemListEntry {
   id: string;
   kind?: string | null;
@@ -32,11 +37,20 @@ export interface ItemListEntry {
   canonical_url: string;
   content_type: ContentType;
   triage_status: TriageStatus;
+  read: boolean;
   starred: boolean;
   extraction_confidence: number;
   short_summary: string | null;
   bucket: ScoreBucket;
   total_score: number;
+  score_breakdown: {
+    relevance_score: number;
+    novelty_score: number;
+    source_quality_score: number;
+    author_match_score: number;
+    topic_match_score: number;
+    zotero_affinity_score: number;
+  };
   reason_trace: Record<string, unknown>;
   also_mentioned_in_count: number;
 }
@@ -261,6 +275,8 @@ export interface ItemsIndexStatus {
 export interface PipelineStatus {
   raw_document_count: number;
   lightweight_pending_count: number;
+  lightweight_metadata_pending_count: number;
+  lightweight_scoring_pending_count: number;
   items_index: ItemsIndexStatus;
 }
 

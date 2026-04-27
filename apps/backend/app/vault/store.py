@@ -16,6 +16,7 @@ from app.vault.frontmatter import parse_frontmatter_document, render_frontmatter
 from app.vault.models import (
     AIRunManifest,
     AITraceArtifact,
+    DefaultSourcesState,
     GraphIndex,
     InsightsIndex,
     ItemsIndex,
@@ -24,6 +25,7 @@ from app.vault.models import (
     PairedDevicesState,
     PairingCodesState,
     PublishedIndex,
+    ReadItemsState,
     RawDocument,
     RawDocumentFrontmatter,
     StarredItemsState,
@@ -116,6 +118,10 @@ class VaultStore:
     @property
     def sources_config_path(self) -> Path:
         return self.config_dir / "sources.json"
+
+    @property
+    def default_sources_state_path(self) -> Path:
+        return self.config_dir / "default-sources-state.json"
 
     @property
     def run_log_path(self) -> Path:
@@ -281,6 +287,35 @@ class VaultStore:
             sort=sort,
         )
 
+    def query_items_page(
+        self,
+        *,
+        query: str | None = None,
+        status_filter: str | None = None,
+        content_type: str | None = None,
+        source_id: str | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        sort: str = "importance",
+        include_hidden_primary_newsletters: bool = False,
+        include_sub_documents: bool = True,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> tuple[list[VaultItemRecord], int]:
+        return self.state.query_items_page(
+            query=query,
+            status_filter=status_filter,
+            content_type=content_type,
+            source_id=source_id,
+            date_from=date_from,
+            date_to=date_to,
+            sort=sort,
+            include_hidden_primary_newsletters=include_hidden_primary_newsletters,
+            include_sub_documents=include_sub_documents,
+            offset=offset,
+            limit=limit,
+        )
+
     def get_item(self, item_id: str) -> VaultItemRecord | None:
         return self.state.get_item(item_id)
 
@@ -314,6 +349,17 @@ class VaultStore:
     def save_sources_config(self, config: VaultSourcesConfig) -> None:
         self.state.save_sources_config(config)
 
+    def load_default_sources_state(self) -> DefaultSourcesState:
+        payload = self._load_json_model(
+            self.default_sources_state_path,
+            DefaultSourcesState,
+            default=DefaultSourcesState(),
+        )
+        return payload or DefaultSourcesState()
+
+    def save_default_sources_state(self, state: DefaultSourcesState) -> None:
+        self.write_json(self.default_sources_state_path, state)
+
     def brief_dir_for_date(self, brief_date: datetime | str | Any) -> Path:
         slug = brief_date.isoformat() if hasattr(brief_date, "isoformat") else str(brief_date)
         return self.briefs_dir / slug
@@ -341,6 +387,12 @@ class VaultStore:
 
     def save_starred_items(self, state: StarredItemsState) -> None:
         self.state.save_starred_items(state)
+
+    def load_read_items(self) -> ReadItemsState:
+        return self.state.load_read_items()
+
+    def save_read_items(self, state: ReadItemsState) -> None:
+        self.state.save_read_items(state)
 
     def append_run_record(self, payload: dict[str, Any]) -> None:
         self.state.append_run_record(payload)

@@ -83,6 +83,8 @@ class LocalControlStatusRead(BaseModel):
     latest_brief_dir: str | None = None
     raw_document_count: int = 0
     lightweight_pending_count: int = 0
+    lightweight_metadata_pending_count: int = 0
+    lightweight_scoring_pending_count: int = 0
     items_index: ItemsIndexStatusRead = Field(default_factory=ItemsIndexStatusRead)
     wiki_page_count: int = 0
     topic_count: int = 0

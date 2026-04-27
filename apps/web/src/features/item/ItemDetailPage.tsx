@@ -1,12 +1,17 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Clock3, FolderTree, Link2, SquareArrowOutUpRight } from "lucide-react";
 import { useParams } from "react-router-dom";
 
 import { api } from "../../api/client";
 import { MarkdownText } from "../../components/MarkdownText";
+import type { MediumDigestActionState } from "../../components/MediumDigestTable";
+import { MediumDigestTable } from "../../components/MediumDigestTable";
 import { PaperAudioPlayer } from "../../components/PaperAudioPlayer";
 import { QuickActions } from "../../components/QuickActions";
 import { SimilarPapersPanel } from "../../components/SimilarPapersPanel";
+import { resolveExternalUrl } from "../../lib/external-links";
+import { isMediumDigestItem, parseMediumDigestArticles } from "../../lib/medium-newsletter";
 import { resolvePaperAudioUrl, resolvePaperFiledText, resolvePaperSummary, resolveSimilarPapers } from "../../lib/paper-details";
 
 const contentTypeLabel: Record<string, string> = {
@@ -49,10 +54,47 @@ function MetadataRow({ label, value }: { label: string; value: string | null | u
 
 export function ItemDetailPage() {
   const { itemId = "" } = useParams();
+  const queryClient = useQueryClient();
+  const [mediumActionState, setMediumActionState] = useState<Record<string, MediumDigestActionState>>({});
   const itemQuery = useQuery({
     queryKey: ["item", itemId],
     queryFn: () => api.getItem(itemId),
     enabled: Boolean(itemId),
+  });
+  const mediumArticles = useMemo(
+    () => (itemQuery.data && isMediumDigestItem(itemQuery.data) ? parseMediumDigestArticles(itemQuery.data.cleaned_text) : []),
+    [itemQuery.data],
+  );
+  const addMediumArticle = useMutation({
+    mutationFn: (url: string) => api.importUrlWithSummary(url),
+    onMutate: (url) => {
+      setMediumActionState((current) => ({
+        ...current,
+        [url]: { status: "pending" },
+      }));
+    },
+    onError: (error, url) => {
+      setMediumActionState((current) => ({
+        ...current,
+        [url]: {
+          status: "failed",
+          message: error instanceof Error && error.message ? error.message : "The article could not be added right now.",
+        },
+      }));
+    },
+    onSuccess: async (createdItem, url) => {
+      setMediumActionState((current) => ({
+        ...current,
+        [url]: {
+          status: "succeeded",
+          itemId: createdItem.id,
+        },
+      }));
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["items"] }),
+        queryClient.invalidateQueries({ queryKey: ["item", itemId] }),
+      ]);
+    },
   });
 
   if (itemQuery.isLoading) return <div className="page-loading">Loading item…</div>;
@@ -64,6 +106,7 @@ export function ItemDetailPage() {
   const filedText = resolvePaperFiledText(item);
   const audioUrl = resolvePaperAudioUrl(item);
   const similarPapers = resolveSimilarPapers(item);
+  const canonicalUrl = resolveExternalUrl(item.canonical_url);
 
   return (
     <div className="grid gap-6 pb-10 xl:grid-cols-[minmax(0,1.3fr)_380px]">
@@ -90,6 +133,12 @@ export function ItemDetailPage() {
               {summary ?? "No summary has been written for this raw document yet."}
             </MarkdownText>
           </div>
+
+          <MediumDigestTable
+            articles={mediumArticles}
+            onAddToVault={(url) => addMediumArticle.mutate(url)}
+            stateByUrl={mediumActionState}
+          />
 
           <div className="content-block">
             <p className="content-label">Filed text</p>
@@ -143,14 +192,20 @@ export function ItemDetailPage() {
         <section className="editorial-panel">
           <p className="section-kicker">Links</p>
           <div className="mt-4 space-y-3">
-            <a className="secondary-button w-full justify-center" href={item.canonical_url} rel="noreferrer" target="_blank">
+            <a className="secondary-button w-full justify-center" href={canonicalUrl} rel="noreferrer" target="_blank">
               <SquareArrowOutUpRight className="h-4 w-4" />
               Open source
             </a>
             {item.outbound_links.slice(0, 8).map((link) => (
-              <a key={link} className="block text-sm leading-6 text-[var(--muted)] underline-offset-4 hover:underline" href={link} rel="noreferrer" target="_blank">
+              <a
+                key={link}
+                className="block text-sm leading-6 text-[var(--muted)] underline-offset-4 hover:underline"
+                href={resolveExternalUrl(link)}
+                rel="noreferrer"
+                target="_blank"
+              >
                 <Link2 className="mr-2 inline h-4 w-4" />
-                {link}
+                {resolveExternalUrl(link)}
               </a>
             ))}
             {!item.outbound_links.length ? (

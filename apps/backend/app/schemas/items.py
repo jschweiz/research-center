@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from pydantic import BaseModel, Field, HttpUrl, field_serializer
+from pydantic import BaseModel, Field, HttpUrl, field_serializer, field_validator
 
 from app.db.models import ContentType, RunStatus, ScoreBucket, TriageStatus
 from app.schemas.common import AlphaXivPaperRead
@@ -17,6 +17,53 @@ class ManualImportRequest(BaseModel):
     url: HttpUrl
 
 
+def _normalize_optional_string(value: object) -> str | None:
+    if value is None:
+        return None
+    cleaned = " ".join(str(value).strip().split())
+    return cleaned or None
+
+
+class CapturedPageImportRequest(BaseModel):
+    url: HttpUrl
+    canonical_url: HttpUrl | None = None
+    page_title: str | None = None
+    site_name: str | None = None
+    description: str | None = None
+    published_at: datetime | None = None
+    author_hints: list[str] = Field(default_factory=list)
+    byline: str | None = None
+    language: str | None = None
+    extraction_mode: str | None = None
+    content_text: str | None = None
+    article_html: str | None = None
+
+    @field_validator(
+        "page_title",
+        "site_name",
+        "description",
+        "byline",
+        "language",
+        "extraction_mode",
+        mode="before",
+    )
+    @classmethod
+    def normalize_optional_strings(cls, value: object) -> str | None:
+        return _normalize_optional_string(value)
+
+    @field_validator("author_hints", mode="before")
+    @classmethod
+    def normalize_author_hints(cls, value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        normalized: list[str] = []
+        for entry in value:
+            cleaned = _normalize_optional_string(entry)
+            if cleaned:
+                normalized.append(cleaned)
+        return normalized
+
+
 class ItemScoreRead(BaseModel):
     relevance_score: float = 0.0
     novelty_score: float = 0.0
@@ -27,6 +74,15 @@ class ItemScoreRead(BaseModel):
     total_score: float = 0.0
     bucket: ScoreBucket = ScoreBucket.ARCHIVE
     reason_trace: dict = Field(default_factory=dict)
+
+
+class ItemScoreBreakdownRead(BaseModel):
+    relevance_score: float = 0.0
+    novelty_score: float = 0.0
+    source_quality_score: float = 0.0
+    author_match_score: float = 0.0
+    topic_match_score: float = 0.0
+    zotero_affinity_score: float = 0.0
 
 
 class ItemInsightRead(BaseModel):
@@ -63,11 +119,13 @@ class ItemListEntry(BaseModel):
     canonical_url: str
     content_type: ContentType
     triage_status: TriageStatus
+    read: bool = False
     starred: bool
     extraction_confidence: float
     short_summary: str | None = None
     bucket: ScoreBucket = ScoreBucket.ARCHIVE
     total_score: float = 0.0
+    score_breakdown: ItemScoreBreakdownRead = Field(default_factory=ItemScoreBreakdownRead)
     reason_trace: dict = Field(default_factory=dict)
     also_mentioned_in_count: int = 0
 
@@ -88,6 +146,7 @@ class ItemDetailRead(BaseModel):
     canonical_url: str
     content_type: ContentType
     triage_status: TriageStatus
+    read: bool = False
     starred: bool
     ingest_status: RunStatus
     extraction_confidence: float

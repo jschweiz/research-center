@@ -22,9 +22,10 @@ import {
 } from "lucide-react";
 import { BrowserRouter, Link, Navigate, NavLink, Outlet, Route, Routes, useLocation, useOutletContext, useSearchParams } from "react-router-dom";
 
-import type { IngestionRunHistoryEntry, RunStatus, Source, SourceType } from "../api/types";
+import type { AlphaXivSort, IngestionRunHistoryEntry, RunStatus, Source, SourceType } from "../api/types";
 import { hasSuccessfulEditionRun } from "../lib/edition-output-status";
 import { queryClient } from "../lib/query-client";
+import { useDefaultedDateInput } from "../lib/use-defaulted-date-input";
 import {
   getStoredLocalControlToken,
   getStoredShellSidebarCollapsed,
@@ -33,6 +34,7 @@ import {
 } from "../runtime/storage";
 import type { LocalControlStatus, RuntimeConfig } from "../runtime/types";
 import { localControlClient, LocalControlError } from "./client";
+import { LocalControlBriefTab } from "./LocalControlBriefTab";
 import { LocalControlDocumentDetailPage } from "./LocalControlDocumentDetailPage";
 import { LocalControlDocumentsTab } from "./LocalControlDocumentsTab";
 import { LocalControlProfileTab } from "./LocalControlProfileTab";
@@ -54,6 +56,14 @@ const LOCAL_CONTROL_SECTIONS: LocalControlSection[] = [
     description: "Inspect runtime health, vault readiness, and the latest local publication state.",
     kicker: "Mac-served app / Overview",
     icon: RadioTower,
+  },
+  {
+    path: "/brief",
+    label: "Brief",
+    title: "Consult the generated brief",
+    description: "Read the daily or weekly brief directly on the paired Mac surface, with links back into local document detail and audio when available.",
+    kicker: "Mac-served app / Brief",
+    icon: BookOpen,
   },
   {
     path: "/insights",
@@ -481,17 +491,23 @@ function PipelineTabSkeleton() {
     <div className="space-y-8">
       <section className="space-y-4">
         <SectionIntro kicker="Staged pipeline" title="Run each step separately" />
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <ActionCardSkeleton
             icon={<Mail className="h-5 w-5" />}
             subtitle="Discover website posts and newsletter issues, write canonical raw documents, and do deterministic newsletter decomposition only."
             title="Fetch sources"
           />
           <ActionCardSkeleton
-            buttonLabel="Run lightweight"
+            buttonLabel="Refresh metadata"
             icon={<Sparkles className="h-5 w-5" />}
-            subtitle="Add tags, authors, and short summaries to raw documents with the local lightweight pass."
-            title="Lightweight enrich"
+            subtitle="Add or refresh tags, authors, and short summaries for raw documents."
+            title="Enrichment"
+          />
+          <ActionCardSkeleton
+            buttonLabel="Generate scores"
+            icon={<Sparkles className="h-5 w-5" />}
+            subtitle="Generate or refresh lightweight document scores after metadata is current."
+            title="Scoring"
           />
           <ActionCardSkeleton
             icon={<Database className="h-5 w-5" />}
@@ -674,11 +690,6 @@ function formatBriefDayLabel(value: string) {
   }).format(new Date(`${value}T12:00:00`));
 }
 
-function formatEditionTargetLabel(value: string) {
-  const [year, month, day] = value.split("-");
-  return `${Number(day)}/${month}/${year}`;
-}
-
 function parseIsoDate(value: string) {
   const [year, month, day] = value.split("-").map(Number);
   return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
@@ -797,6 +808,12 @@ function parsePositiveInteger(value: string | null) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function parseNonNegativeInteger(value: string | null) {
+  if (value === null || value === "") return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
 function isLiveRunStatus(
   status: RunStatus | null | undefined,
 ): status is Extract<RunStatus, "pending" | "running"> {
@@ -845,6 +862,8 @@ function buildObservedSourceFetchAction({
       activeSourceCount: null,
       rawDocumentCount: null,
       lightweightPendingCount: null,
+      lightweightMetadataPendingCount: null,
+      lightweightScoringPendingCount: null,
       staleDocumentCount: null,
     },
     sourceId: source.id,
@@ -870,6 +889,8 @@ function buildObservedDashboardAction(
       activeSourceCount: null,
       rawDocumentCount: null,
       lightweightPendingCount: null,
+      lightweightMetadataPendingCount: null,
+      lightweightScoringPendingCount: null,
       staleDocumentCount: null,
     },
     summary: run.summary,
@@ -888,11 +909,16 @@ function buildObservedDashboardAction(
   }
 
   if (run.operation_kind === "lightweight_enrichment") {
+    const phase = findRunBasicInfoValue(run, "Phase")?.toLowerCase();
+    const observedKind: Extract<LocalActionKind, "lightweight_metadata" | "lightweight_scoring"> =
+      phase === "scoring" || (phase !== "metadata" && findLatestLightweightPhaseProgress(run)?.phase === "scoring")
+        ? "lightweight_scoring"
+        : "lightweight_metadata";
     return {
       ...baseAction,
-      kind: "lightweight_enrich",
+      kind: observedKind,
       section: "pipeline_steps",
-      label: "Lightweight enrich",
+      label: observedKind === "lightweight_scoring" ? "Scoring" : "Enrichment",
     };
   }
 
@@ -1044,51 +1070,44 @@ function EditionTargetActionRow({
   buttonLabel,
   busyLabel,
   disabled,
+  inputDisabled,
   loading,
-  options,
-  selectDisabled,
   value,
+  onBlur,
   onChange,
   onClick,
 }: {
   buttonLabel: string;
   busyLabel: string;
   disabled: boolean;
+  inputDisabled: boolean;
   loading: boolean;
-  options: Array<{ brief_date: string; coverage_start: string; coverage_end: string }>;
-  selectDisabled: boolean;
   value: string;
+  onBlur: () => void;
   onChange: (value: string) => void;
   onClick: () => void;
 }) {
-  const resolvedValue = value || options[0]?.brief_date || "";
-
   return (
     <div className="mt-auto pt-4">
-      <span className="field-label">Edition target</span>
+      <span className="field-label">Edition date</span>
       <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center">
-        <select
+        <input
+          aria-label="Edition date"
           className="field-input mt-0 min-w-0 w-full sm:max-w-[11rem]"
-          disabled={selectDisabled}
+          disabled={inputDisabled}
+          onBlur={onBlur}
           onChange={(event) => onChange(event.target.value)}
-          value={resolvedValue}
-        >
-          {options.length ? (
-            options.map((option) => (
-              <option key={option.brief_date} value={option.brief_date}>
-                {formatEditionTargetLabel(option.brief_date)}
-              </option>
-            ))
-          ) : (
-            <option value="">No editions available yet</option>
-          )}
-        </select>
+          type="date"
+          value={value}
+        />
         <button className="primary-button w-full shrink-0 sm:w-auto" disabled={disabled} onClick={onClick} type="button">
           {loading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
           {loading ? busyLabel : buttonLabel}
         </button>
       </div>
-      {!options.length ? <p className="mt-2 text-xs leading-5 text-[var(--muted)]">No edition targets are available yet. The Mac will use the current local brief day.</p> : null}
+      <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+        Pick any single day. The latest brief day is used by default when it is available.
+      </p>
     </div>
   );
 }
@@ -1248,7 +1267,8 @@ type LocalActionKind =
   | "ingest"
   | "fetch_sources"
   | "source_fetch"
-  | "lightweight_enrich"
+  | "lightweight_metadata"
+  | "lightweight_scoring"
   | "rebuild_index"
   | "compile_wiki"
   | "health_check"
@@ -1275,6 +1295,8 @@ type ActiveLocalAction = {
     activeSourceCount: number | null;
     rawDocumentCount: number | null;
     lightweightPendingCount: number | null;
+    lightweightMetadataPendingCount: number | null;
+    lightweightScoringPendingCount: number | null;
     staleDocumentCount: number | null;
   };
   briefDate?: string;
@@ -1332,8 +1354,11 @@ function runMatchesAction(run: IngestionRunHistoryEntry, action: ActiveLocalActi
     }
     return findRunSourceId(run) === action.sourceId;
   }
-  if (action.kind === "lightweight_enrich") {
-    return run.operation_kind === "lightweight_enrichment" && run.trigger === "manual_lightweight_enrich";
+  if (action.kind === "lightweight_metadata") {
+    return run.operation_kind === "lightweight_enrichment" && run.trigger === "manual_lightweight_metadata";
+  }
+  if (action.kind === "lightweight_scoring") {
+    return run.operation_kind === "lightweight_enrichment" && run.trigger === "manual_lightweight_scoring";
   }
   if (action.kind === "rebuild_index") {
     return run.operation_kind === "vault_index" && run.trigger === "manual_index";
@@ -1404,7 +1429,14 @@ function isStaleTrackedAction(action: ActiveLocalAction, runs: IngestionRunHisto
 }
 
 function getLocalActionSection(kind: LocalActionKind): LocalActionSection {
-  if (kind === "fetch_sources" || kind === "source_fetch" || kind === "lightweight_enrich" || kind === "rebuild_index" || kind === "ingest") {
+  if (
+    kind === "fetch_sources"
+    || kind === "source_fetch"
+    || kind === "lightweight_metadata"
+    || kind === "lightweight_scoring"
+    || kind === "rebuild_index"
+    || kind === "ingest"
+  ) {
     return "pipeline_steps";
   }
   if (kind === "regenerate_brief" || kind === "generate_audio" || kind === "publish") {
@@ -1445,6 +1477,113 @@ function findMatchingActionRun(action: ActiveLocalAction, runs: IngestionRunHist
   return runs.find((run) => matchesActiveAction(run, action)) ?? null;
 }
 
+function describeLightweightStageProgress({
+  action,
+  stage,
+  totalPending,
+  remainingPending,
+  matchingRun,
+}: {
+  action: ActiveLocalAction;
+  stage: "metadata" | "scoring";
+  totalPending: number | null;
+  remainingPending: number | null;
+  matchingRun: IngestionRunHistoryEntry | null;
+}): LocalActionProgressState {
+  const runTotal = matchingRun && matchingRun.total_titles > 0 ? matchingRun.total_titles : totalPending;
+  const runCompleted = runTotal !== null ? clampNumber(matchingRun?.updated_count ?? 0, 0, runTotal) : 0;
+  const lastRunMessage = latestRunMessage(matchingRun);
+  const phaseProgress = findLatestLightweightPhaseProgress(matchingRun);
+  const relevantPhaseProgress = phaseProgress?.phase === stage ? phaseProgress : null;
+  const stageLabel = stage === "metadata" ? "metadata" : "scoring";
+  const completionVerb = stage === "metadata" ? "refreshed" : "scored";
+
+  if (
+    action.status === "running"
+    && matchingRun
+    && runCompleted === 0
+    && relevantPhaseProgress
+  ) {
+    const remaining = Math.max(0, relevantPhaseProgress.total - relevantPhaseProgress.completed);
+    return {
+      label: `${relevantPhaseProgress.completed} of ${relevantPhaseProgress.total} documents processed in ${stageLabel}`,
+      detail:
+        relevantPhaseProgress.latest
+          ? remaining > 0
+            ? `${formatCountLabel(remaining, "document")} remaining in ${stageLabel}. Latest: ${relevantPhaseProgress.latest}`
+            : `Finalizing ${stageLabel}. Latest: ${relevantPhaseProgress.latest}`
+          : remaining > 0
+            ? `${formatCountLabel(remaining, "document")} remaining in ${stageLabel}.`
+            : `Finalizing ${stageLabel}.`,
+      fraction: relevantPhaseProgress.completed / relevantPhaseProgress.total,
+    };
+  }
+
+  if (
+    action.status === "running"
+    && matchingRun
+    && runTotal !== null
+    && (matchingRun.updated_count > 0 || !relevantPhaseProgress)
+  ) {
+    const remaining = Math.max(0, runTotal - runCompleted);
+    return {
+      label: `${runCompleted} of ${runTotal} documents ${completionVerb}`,
+      detail:
+        lastRunMessage
+          ? remaining > 0
+            ? `${formatCountLabel(remaining, "document")} remaining in this run. Latest: ${lastRunMessage}`
+            : `Finalizing the ${stageLabel} run. Latest: ${lastRunMessage}`
+          : remaining > 0
+            ? `${formatCountLabel(remaining, "document")} remaining in this run.`
+            : `Finalizing the ${stageLabel} run.`,
+      fraction: runTotal > 0 ? runCompleted / runTotal : null,
+    };
+  }
+
+  if (totalPending === null || totalPending <= 0) {
+    if (stage === "metadata") {
+      return {
+        label: action.status === "running" ? "Refreshing lightweight metadata" : "Queued metadata refresh",
+        detail:
+          action.status === "running"
+            ? "The local Ollama pass is checking for raw documents that still need metadata."
+            : "The metadata refresh will start as soon as the current job completes.",
+        fraction: null,
+      };
+    }
+    return {
+      label: action.status === "running" ? "Refreshing lightweight scores" : "Queued score refresh",
+      detail:
+        action.status === "running"
+          ? "The local Ollama pass is checking for documents that are ready for new scores."
+          : "The scoring refresh will start as soon as the current job completes.",
+      fraction: null,
+    };
+  }
+
+  if (action.status === "pending") {
+    return {
+      label: `0 of ${totalPending} pending documents ${completionVerb}`,
+      detail:
+        stage === "metadata"
+          ? `Queued to refresh ${formatCountLabel(totalPending, "document")} that still need metadata.`
+          : `Queued to score ${formatCountLabel(totalPending, "document")} with current metadata.`,
+      fraction: 0,
+    };
+  }
+
+  const nextRemainingPending = remainingPending ?? totalPending;
+  const completed = clampNumber(totalPending - nextRemainingPending, 0, totalPending);
+  return {
+    label: `${completed} of ${totalPending} pending documents ${completionVerb}`,
+    detail:
+      stage === "metadata"
+        ? `${formatCountLabel(Math.max(0, nextRemainingPending), "document")} still need lightweight metadata.`
+        : `${formatCountLabel(Math.max(0, nextRemainingPending), "document")} still need lightweight scoring.`,
+    fraction: totalPending > 0 ? completed / totalPending : null,
+  };
+}
+
 function describeActiveActionProgress(
   action: ActiveLocalAction,
   status: LocalControlStatus | undefined,
@@ -1452,81 +1591,24 @@ function describeActiveActionProgress(
 ): LocalActionProgressState | null {
   const matchingRun = findMatchingActionRun(action, runs);
 
-  if (action.kind === "lightweight_enrich") {
-    const totalPending = action.progressSnapshot.lightweightPendingCount;
-    const runTotal = matchingRun && matchingRun.total_titles > 0 ? matchingRun.total_titles : totalPending;
-    const runCompleted = runTotal !== null ? clampNumber(matchingRun?.updated_count ?? 0, 0, runTotal) : 0;
-    const lastRunMessage = latestRunMessage(matchingRun);
-    const phaseProgress = findLatestLightweightPhaseProgress(matchingRun);
-    if (
-      action.status === "running"
-      && matchingRun
-      && runCompleted === 0
-      && phaseProgress
-    ) {
-      const phaseLabel = phaseProgress.phase === "metadata" ? "processed in metadata" : "processed in scoring";
-      const remaining = Math.max(0, phaseProgress.total - phaseProgress.completed);
-      return {
-        label: `${phaseProgress.completed} of ${phaseProgress.total} documents ${phaseLabel}`,
-        detail:
-          phaseProgress.latest
-            ? remaining > 0
-              ? `${formatCountLabel(remaining, "document")} remaining in ${phaseProgress.phase}. Latest: ${phaseProgress.latest}`
-              : `Finalizing ${phaseProgress.phase}. Latest: ${phaseProgress.latest}`
-            : remaining > 0
-              ? `${formatCountLabel(remaining, "document")} remaining in ${phaseProgress.phase}.`
-              : `Finalizing ${phaseProgress.phase}.`,
-        fraction: phaseProgress.completed / phaseProgress.total,
-      };
-    }
+  if (action.kind === "lightweight_metadata") {
+    return describeLightweightStageProgress({
+      action,
+      stage: "metadata",
+      totalPending: action.progressSnapshot.lightweightMetadataPendingCount,
+      remainingPending: status?.lightweight_metadata_pending_count ?? null,
+      matchingRun,
+    });
+  }
 
-    if (
-      action.status === "running"
-      && matchingRun
-      && runTotal !== null
-      && (matchingRun.updated_count > 0 || !phaseProgress)
-    ) {
-      const remaining = Math.max(0, runTotal - runCompleted);
-      return {
-        label: `${runCompleted} of ${runTotal} documents enriched`,
-        detail:
-          lastRunMessage
-            ? remaining > 0
-              ? `${formatCountLabel(remaining, "document")} remaining in this run. Latest: ${lastRunMessage}`
-              : `Finalizing the lightweight enrichment run. Latest: ${lastRunMessage}`
-            : remaining > 0
-              ? `${formatCountLabel(remaining, "document")} remaining in this run.`
-              : "Finalizing the lightweight enrichment run.",
-        fraction: runTotal > 0 ? runCompleted / runTotal : null,
-      };
-    }
-
-    if (totalPending === null || totalPending <= 0) {
-      return {
-        label: action.status === "running" ? "Refreshing lightweight metadata" : "Queued lightweight refresh",
-        detail:
-          action.status === "running"
-            ? "The local Ollama pass is checking for newly stale raw documents."
-            : "The lightweight pass will start as soon as the current job completes.",
-        fraction: null,
-      };
-    }
-
-    if (action.status === "pending") {
-      return {
-        label: `0 of ${totalPending} pending documents enriched`,
-        detail: `Queued to process ${formatCountLabel(totalPending, "document")} that still need lightweight metadata.`,
-        fraction: 0,
-      };
-    }
-
-    const remainingPending = status?.lightweight_pending_count ?? totalPending;
-    const completed = clampNumber(totalPending - remainingPending, 0, totalPending);
-    return {
-      label: `${completed} of ${totalPending} pending documents enriched`,
-      detail: `${formatCountLabel(Math.max(0, remainingPending), "document")} still need lightweight metadata.`,
-      fraction: totalPending > 0 ? completed / totalPending : null,
-    };
+  if (action.kind === "lightweight_scoring") {
+    return describeLightweightStageProgress({
+      action,
+      stage: "scoring",
+      totalPending: action.progressSnapshot.lightweightScoringPendingCount,
+      remainingPending: status?.lightweight_scoring_pending_count ?? null,
+      matchingRun,
+    });
   }
 
   if (action.kind === "fetch_sources") {
@@ -1573,7 +1655,28 @@ function describeActiveActionProgress(
     const requestedLimit = action.maxItems ?? null;
     const lastRunMessage = matchingRun?.logs.length ? matchingRun.logs[matchingRun.logs.length - 1]?.message ?? null : null;
     const touchedDocumentCount = matchingRun ? matchingRun.created_count + matchingRun.updated_count : 0;
+    const plannedInputs = matchingRun ? parseNonNegativeInteger(findRunBasicInfoValue(matchingRun, "Inputs planned")) : null;
+    const processedInputs = matchingRun ? parseNonNegativeInteger(findRunBasicInfoValue(matchingRun, "Inputs processed")) : null;
     const limitLabel = requestedLimit ? `${requestedLimit} document${requestedLimit === 1 ? "" : "s"}` : "the configured source limit";
+
+    if (plannedInputs !== null && plannedInputs > 0) {
+      const completedInputs = clampNumber(processedInputs ?? 0, 0, plannedInputs);
+      if (action.status === "pending") {
+        return {
+          label: `0 of ${plannedInputs} source inputs processed`,
+          detail: `Queued to fetch up to ${limitLabel} for ${sourceLabel}.`,
+          fraction: 0,
+        };
+      }
+      return {
+        label: `${completedInputs} of ${plannedInputs} source inputs processed`,
+        detail:
+          lastRunMessage
+            ? `${formatCountLabel(touchedDocumentCount, "document")} written or refreshed so far. Latest: ${lastRunMessage}`
+            : `Fetching up to ${limitLabel}. Lightweight enrichment and index refresh stay manual until you run them from the controls above.`,
+        fraction: completedInputs / plannedInputs,
+      };
+    }
 
     return {
       label: action.status === "running" ? `${sourceLabel} is fetching on the Mac` : `${sourceLabel} is queued`,
@@ -1581,7 +1684,7 @@ function describeActiveActionProgress(
         action.status === "running"
           ? lastRunMessage
             ? `${formatCountLabel(touchedDocumentCount, "document")} written or refreshed so far. Latest: ${lastRunMessage}`
-            : `Fetching up to ${limitLabel}. Lightweight enrichment and index refresh follow automatically.`
+            : `Fetching up to ${limitLabel}. Lightweight enrichment and index refresh stay manual until you run them from the controls above.`
           : `Queued to fetch up to ${limitLabel} for ${sourceLabel}.`,
       fraction: null,
     };
@@ -1755,6 +1858,8 @@ function useLocalControlDashboardState() {
     activeSourceCount,
     rawDocumentCount: statusQuery.data?.raw_document_count ?? null,
     lightweightPendingCount: statusQuery.data?.lightweight_pending_count ?? null,
+    lightweightMetadataPendingCount: statusQuery.data?.lightweight_metadata_pending_count ?? null,
+    lightweightScoringPendingCount: statusQuery.data?.lightweight_scoring_pending_count ?? null,
     staleDocumentCount: statusQuery.data?.items_index.stale_document_count ?? null,
   });
   const operationsQuery = useQuery({
@@ -1898,15 +2003,19 @@ function useLocalControlDashboardState() {
 
   const fetchSources = useMutation({ mutationFn: localControlClient.runFetchSources, onSuccess: refresh });
   const sourceFetch = useMutation({
-    mutationFn: (payload: { sourceId: string; max_items?: number }) =>
-      localControlClient.runSourcePipeline(payload.sourceId, { max_items: payload.max_items }),
+    mutationFn: (payload: { sourceId: string; max_items?: number; alphaxiv_sort?: AlphaXivSort }) =>
+      localControlClient.runSourcePipeline(payload.sourceId, {
+        max_items: payload.max_items,
+        alphaxiv_sort: payload.alphaxiv_sort,
+      }),
     onSuccess: refresh,
   });
   const stopSourceFetch = useMutation({
     mutationFn: (sourceId: string) => localControlClient.stopSourcePipeline(sourceId),
     onSuccess: refresh,
   });
-  const lightweight = useMutation({ mutationFn: localControlClient.runLightweightEnrich, onSuccess: refresh });
+  const lightweightMetadata = useMutation({ mutationFn: localControlClient.runLightweightMetadata, onSuccess: refresh });
+  const lightweightScoring = useMutation({ mutationFn: localControlClient.runLightweightScoring, onSuccess: refresh });
   const stopLightweight = useMutation({ mutationFn: localControlClient.stopLightweightEnrich, onSuccess: refresh });
   const index = useMutation({ mutationFn: localControlClient.runRebuildItemsIndex, onSuccess: refresh });
   const compileWiki = useMutation({
@@ -1935,7 +2044,8 @@ function useLocalControlDashboardState() {
     fetchSources,
     sourceFetch,
     stopSourceFetch,
-    lightweight,
+    lightweightMetadata,
+    lightweightScoring,
     stopLightweight,
     index,
     compileWiki,
@@ -1968,7 +2078,8 @@ function useLocalControlDashboardState() {
     fetchSources,
     sourceFetch,
     stopSourceFetch,
-    lightweight,
+    lightweightMetadata,
+    lightweightScoring,
     stopLightweight,
     index,
     compileWiki,
@@ -2033,7 +2144,9 @@ function OverviewTab() {
   }
 
   const status = statusQuery.data;
-  const lightweightPendingCount = status.lightweight_pending_count ?? 0;
+  const lightweightMetadataPendingCount = status.lightweight_metadata_pending_count ?? 0;
+  const lightweightScoringPendingCount = status.lightweight_scoring_pending_count ?? 0;
+  const lightweightBacklogCount = lightweightMetadataPendingCount + lightweightScoringPendingCount;
   const indexUpToDate = status.items_index.up_to_date;
   const currentBriefLabel = formatBriefDayLabel(status.current_brief_date);
   const latestPublicationTime = status.latest_publication ? formatTimestamp(status.latest_publication.published_at) : "Not published yet";
@@ -2088,7 +2201,7 @@ function OverviewTab() {
   const ollamaSummary = !status.ollama
     ? "Lightweight enrichment status has not been reported yet."
     : status.ollama.available
-      ? "Handles the fast local pass for tags, authors, and short summaries."
+      ? "Handles the fast local pass for tags, authors, short summaries, and lightweight scores."
       : status.ollama.detail ?? "Fetch and index can still run, but lightweight enrichment will fail fast until Ollama is reachable.";
   const codexSummary = !status.codex
     ? "Advanced synthesis status has not been reported yet."
@@ -2120,8 +2233,8 @@ function OverviewTab() {
                 tone={indexUpToDate ? "success" : "warning"}
               />
               <StatusChip
-                label={lightweightPendingCount ? `${lightweightPendingCount.toLocaleString()} pending enrich` : "No lightweight backlog"}
-                tone={lightweightPendingCount ? "warning" : "success"}
+                label={lightweightBacklogCount ? `${lightweightBacklogCount.toLocaleString()} pending lightweight` : "No lightweight backlog"}
+                tone={lightweightBacklogCount ? "warning" : "success"}
               />
             </div>
           </div>
@@ -2153,13 +2266,13 @@ function OverviewTab() {
         />
         <OverviewMetricCard
           detail={
-            lightweightPendingCount
-              ? "Waiting on local tags, authors, and short summaries."
+            lightweightBacklogCount
+              ? `${lightweightMetadataPendingCount.toLocaleString()} waiting on metadata and ${lightweightScoringPendingCount.toLocaleString()} waiting on scoring.`
               : "Nothing is waiting on the lightweight pass right now."
           }
-          label="Pending enrich"
-          tone={lightweightPendingCount ? "warning" : "success"}
-          value={lightweightPendingCount.toLocaleString()}
+          label="Lightweight backlog"
+          tone={lightweightBacklogCount ? "warning" : "success"}
+          value={lightweightBacklogCount.toLocaleString()}
         />
         <OverviewMetricCard
           detail={
@@ -2319,14 +2432,14 @@ function OverviewTab() {
                     },
                     {
                       label: "Pending queue",
-                      detail: lightweightPendingCount
-                        ? "Raw documents waiting for local enrichment."
+                      detail: lightweightBacklogCount
+                        ? `${lightweightMetadataPendingCount.toLocaleString()} need metadata and ${lightweightScoringPendingCount.toLocaleString()} are ready for scoring.`
                         : "No raw documents are queued for the lightweight pass.",
-                      value: `${lightweightPendingCount.toLocaleString()} document${lightweightPendingCount === 1 ? "" : "s"}`,
+                      value: `${lightweightBacklogCount.toLocaleString()} document${lightweightBacklogCount === 1 ? "" : "s"}`,
                     },
                     {
                       label: "Role",
-                      value: "Tags, authors, short summaries",
+                      value: "Metadata and scoring",
                     },
                   ]}
                 />
@@ -2501,7 +2614,8 @@ function PipelineTabContent({
     fetchSources,
     sourceFetch,
     stopSourceFetch,
-    lightweight,
+    lightweightMetadata,
+    lightweightScoring,
     stopLightweight,
     index,
     regenerate,
@@ -2510,8 +2624,8 @@ function PipelineTabContent({
     syncVault,
   } = dashboard;
   const runs = operationsQuery.data?.runs ?? [];
-  const [selectedBriefDate, setSelectedBriefDate] = useState("");
   const [sourceFetchOverrides, setSourceFetchOverrides] = useState<Record<string, string>>({});
+  const [sourceFetchAlphaXivLikes, setSourceFetchAlphaXivLikes] = useState<Record<string, boolean>>({});
   const [sourceFetchNotice, setSourceFetchNotice] = useState<{ tone: "error" | "success"; message: string } | null>(null);
   const [stoppingSourceId, setStoppingSourceId] = useState<string | null>(null);
   const latestSuccessfulFetchRun =
@@ -2526,41 +2640,47 @@ function PipelineTabContent({
       ? `Discover website posts and newsletter issues, write canonical raw documents, and do deterministic newsletter decomposition only. Last successful fetch completed today at ${formatLogTimeLabel(latestSuccessfulFetchAt)}.`
       : `Discover website posts and newsletter issues, write canonical raw documents, and do deterministic newsletter decomposition only. Last successful fetch completed ${formatTimestamp(latestSuccessfulFetchAt)}.`
     : "Discover website posts and newsletter issues, write canonical raw documents, and do deterministic newsletter decomposition only. No successful fetch has been recorded yet.";
-  const lightweightPendingCount = status.lightweight_pending_count ?? 0;
+  const lightweightMetadataPendingCount = status.lightweight_metadata_pending_count ?? 0;
+  const lightweightScoringPendingCount = status.lightweight_scoring_pending_count ?? 0;
   const lightweightReady = Boolean(status.ollama?.available);
-  const lightweightButtonLabel = lightweightPendingCount > 0 ? `Run lightweight (${lightweightPendingCount})` : "Run lightweight";
-  const lightweightSubtitle =
-    lightweightPendingCount > 0
+  const metadataButtonLabel =
+    lightweightMetadataPendingCount > 0
+      ? `Refresh metadata (${lightweightMetadataPendingCount})`
+      : "Refresh metadata";
+  const metadataSubtitle =
+    lightweightMetadataPendingCount > 0
       ? lightweightReady
-        ? `${lightweightPendingCount} raw document${lightweightPendingCount === 1 ? "" : "s"} have not completed lightweight enrichment yet. Run this to add tags, authors, and short summaries.`
-        : `${lightweightPendingCount} raw document${lightweightPendingCount === 1 ? "" : "s"} have not completed lightweight enrichment yet, but Ollama is unavailable on this Mac right now.`
+        ? `${lightweightMetadataPendingCount} raw document${lightweightMetadataPendingCount === 1 ? "" : "s"} need tags, authors, or short summaries refreshed because their metadata hash is missing or stale.`
+        : `${lightweightMetadataPendingCount} raw document${lightweightMetadataPendingCount === 1 ? "" : "s"} need metadata refresh, but Ollama is unavailable on this Mac right now.`
       : lightweightReady
-        ? "Every raw document has completed lightweight enrichment at least once. Run this only if you want to force a refresh."
-        : "No raw documents are waiting on lightweight enrichment. Ollama is currently unavailable for new work.";
+        ? "All raw documents have current lightweight metadata. Run this only if you want to force a metadata refresh."
+        : "No raw documents are waiting on metadata refresh. Ollama is currently unavailable for new work.";
+  const scoringButtonLabel =
+    lightweightScoringPendingCount > 0
+      ? `Generate scores (${lightweightScoringPendingCount})`
+      : "Generate scores";
+  const scoringSubtitle =
+    lightweightScoringPendingCount > 0
+      ? lightweightReady
+        ? `${lightweightScoringPendingCount} raw document${lightweightScoringPendingCount === 1 ? "" : "s"} have current metadata but still need lightweight scores refreshed because their scoring hash is missing or stale.`
+        : `${lightweightScoringPendingCount} raw document${lightweightScoringPendingCount === 1 ? "" : "s"} are ready for scoring, but Ollama is unavailable on this Mac right now.`
+      : lightweightReady
+        ? "All metadata-current documents already have current lightweight scores."
+        : "No documents are waiting on scoring right now. Ollama is currently unavailable for new work.";
   const indexUpToDate = status.items_index.up_to_date;
   const indexStaleCount = status.items_index.stale_document_count;
   const indexTone = indexUpToDate ? "success" : "error";
   const indexSubtitle = indexUpToDate
     ? `The items index is current${status.items_index.generated_at ? ` as of ${formatTimestamp(status.items_index.generated_at)}` : ""}. Rebuild only if you want to force a refresh.`
     : `The items index is stale for ${indexStaleCount} document${indexStaleCount === 1 ? "" : "s"}. Rebuild it to refresh the inbox, filters, brief inputs, and viewer lookups.`;
-  const editionOptions = useMemo(() => {
-    if (briefAvailabilityQuery.data?.days.length) {
-      return briefAvailabilityQuery.data.days;
-    }
-    if (status.current_brief_date) {
-      const coverageDay = shiftIsoDate(status.current_brief_date, -1);
-      return [
-        {
-          brief_date: status.current_brief_date,
-          coverage_start: coverageDay,
-          coverage_end: coverageDay,
-        },
-      ];
-    }
-    return [];
-  }, [briefAvailabilityQuery.data?.days, status.current_brief_date]);
-  const activeBriefDate = selectedBriefDate || editionOptions[0]?.brief_date || status.current_brief_date;
-  const currentEditionTarget = status.current_brief_date || null;
+  const defaultBriefDate =
+    briefAvailabilityQuery.data?.default_day
+    ?? status.current_brief_date
+    ?? briefAvailabilityQuery.data?.days.at(-1)?.brief_date
+    ?? "";
+  const briefDateInput = useDefaultedDateInput(defaultBriefDate);
+  const activeBriefDate = briefDateInput.value;
+  const currentEditionTarget = briefAvailabilityQuery.data?.default_day ?? status.current_brief_date ?? null;
   const currentEditionSelected = Boolean(currentEditionTarget && activeBriefDate === currentEditionTarget);
   const currentEditionOutputState = useMemo(
     () => ({
@@ -2580,16 +2700,27 @@ function PipelineTabContent({
     fetchActions,
     findObservedDashboardAction(runs, "fetch_sources"),
   );
-  const lightweightActions = activeActions.filter((action) => action.kind === "lightweight_enrich");
-  const activeLightweightAction = preferLocalAction(
-    lightweightActions,
-    findObservedDashboardAction(runs, "lightweight_enrich"),
+  const lightweightMetadataActions = activeActions.filter((action) => action.kind === "lightweight_metadata");
+  const activeLightweightMetadataAction = preferLocalAction(
+    lightweightMetadataActions,
+    findObservedDashboardAction(runs, "lightweight_metadata"),
   );
-  const lightweightLoading = stopLightweight.isPending || Boolean(activeLightweightAction);
-  const lightweightBusyLabel = stopLightweight.isPending
+  const lightweightScoringActions = activeActions.filter((action) => action.kind === "lightweight_scoring");
+  const activeLightweightScoringAction = preferLocalAction(
+    lightweightScoringActions,
+    findObservedDashboardAction(runs, "lightweight_scoring"),
+  );
+  const metadataLoading = stopLightweight.isPending || Boolean(activeLightweightMetadataAction);
+  const scoringLoading = stopLightweight.isPending || Boolean(activeLightweightScoringAction);
+  const metadataBusyLabel = stopLightweight.isPending
     ? "Stopping..."
-    : activeLightweightAction
-      ? "Stop lightweight"
+    : activeLightweightMetadataAction
+      ? "Stop metadata"
+      : "Running...";
+  const scoringBusyLabel = stopLightweight.isPending
+    ? "Stopping..."
+    : activeLightweightScoringAction
+      ? "Stop scoring"
       : "Running...";
   const indexActions = activeActions.filter((action) => action.kind === "rebuild_index");
   const activeIndexAction = preferLocalAction(
@@ -2654,6 +2785,8 @@ function PipelineTabContent({
   );
 
   const sourceFetchMaxItemsValue = (source: Source) => sourceFetchOverrides[source.id] ?? String(source.max_items);
+  const isAlphaXivSource = (source: Source) => source.custom_pipeline_id === "alphaxiv-paper";
+  const sourceFetchUsesAlphaXivLikes = (source: Source) => Boolean(sourceFetchAlphaXivLikes[source.id]);
 
   const handleSourceFetchMaxItemsChange = (sourceId: string, value: string) => {
     setSourceFetchNotice(null);
@@ -2669,6 +2802,20 @@ function PipelineTabContent({
     });
   };
 
+  const handleSourceFetchAlphaXivLikesChange = (sourceId: string, checked: boolean) => {
+    setSourceFetchNotice(null);
+    setSourceFetchAlphaXivLikes((current) => {
+      if (!checked) {
+        if (!(sourceId in current)) return current;
+        const next = { ...current };
+        delete next[sourceId];
+        return next;
+      }
+      if (current[sourceId]) return current;
+      return { ...current, [sourceId]: true };
+    });
+  };
+
   const handleSourceFetch = (source: Source) => {
     setSourceFetchNotice(null);
     const requestedMaxItems = Number.parseInt(sourceFetchMaxItemsValue(source), 10);
@@ -2679,17 +2826,32 @@ function PipelineTabContent({
       });
       return;
     }
+    const requestedAlphaXivSort: AlphaXivSort | undefined =
+      isAlphaXivSource(source) && sourceFetchUsesAlphaXivLikes(source)
+        ? "Likes"
+        : undefined;
 
     void runTrackedAction(
       {
         kind: "source_fetch",
         label: `Fetch ${source.name}`,
-        summary: `${source.name} is being fetched on the Mac with a cap of ${requestedMaxItems} documents. The source-specific enrichment and index refresh will follow automatically.`,
+        summary:
+          `${source.name} is being fetched on the Mac with a cap of ${requestedMaxItems} documents.`
+          + (
+            requestedAlphaXivSort
+              ? ` This run overrides alphaXiv sort to ${requestedAlphaXivSort} so the fetch surfaces the platform’s most-liked papers before any manual enrichment or index refresh.`
+              : " This fetch writes raw documents only. Run enrichment and index refresh manually from the controls above when you want them."
+          ),
         sourceId: source.id,
         sourceName: source.name,
         maxItems: requestedMaxItems,
       },
-      () => sourceFetch.mutateAsync({ sourceId: source.id, max_items: requestedMaxItems }),
+      () =>
+        sourceFetch.mutateAsync({
+          sourceId: source.id,
+          max_items: requestedMaxItems,
+          alphaxiv_sort: requestedAlphaXivSort,
+        }),
     );
   };
 
@@ -2719,14 +2881,24 @@ function PipelineTabContent({
     }
   };
 
-  const runLightweightEnrich = () =>
+  const runLightweightMetadata = () =>
     void runTrackedAction(
       {
-        kind: "lightweight_enrich",
-        label: "Lightweight enrich",
-        summary: "The local Ollama enrichment pass is starting now. Watch operations for the run log and counts.",
+        kind: "lightweight_metadata",
+        label: "Enrichment",
+        summary: "The local Ollama metadata pass is starting now. Watch operations for the run log and counts.",
       },
-      () => lightweight.mutateAsync(),
+      () => lightweightMetadata.mutateAsync(),
+    );
+
+  const runLightweightScoring = () =>
+    void runTrackedAction(
+      {
+        kind: "lightweight_scoring",
+        label: "Scoring",
+        summary: "The local Ollama scoring pass is starting now. Watch operations for the run log and counts.",
+      },
+      () => lightweightScoring.mutateAsync(),
     );
 
   const handleStopLightweight = async (action: ActiveLocalAction | null) => {
@@ -2740,19 +2912,21 @@ function PipelineTabContent({
     }
   };
 
-  const handleLightweightAction = () => {
-    if (activeLightweightAction) {
-      void handleStopLightweight(activeLightweightAction);
+  const handleMetadataAction = () => {
+    if (activeLightweightMetadataAction) {
+      void handleStopLightweight(activeLightweightMetadataAction);
       return;
     }
-    runLightweightEnrich();
+    runLightweightMetadata();
   };
 
-  useEffect(() => {
-    if (!editionOptions.length) return;
-    if (editionOptions.some((option) => option.brief_date === selectedBriefDate)) return;
-    setSelectedBriefDate(editionOptions[0].brief_date);
-  }, [editionOptions, selectedBriefDate]);
+  const handleScoringAction = () => {
+    if (activeLightweightScoringAction) {
+      void handleStopLightweight(activeLightweightScoringAction);
+      return;
+    }
+    runLightweightScoring();
+  };
 
   return (
     <div className="space-y-8">
@@ -2761,7 +2935,7 @@ function PipelineTabContent({
           <p className="section-kicker">Staged pipeline</p>
           <h3 className="section-title">Run each step separately</h3>
         </div>
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <ActionCard
             activeAction={activeFetchAction}
             icon={<Mail className="h-5 w-5" />}
@@ -2784,19 +2958,34 @@ function PipelineTabContent({
             <InlineActionProgress action={activeFetchAction} runs={runs} status={status} />
           </ActionCard>
           <ActionCard
-            activeAction={activeLightweightAction}
-            buttonLabel={lightweightButtonLabel}
-            busyLabel={lightweightBusyLabel}
-            disabled={(!lightweightReady && !activeLightweightAction) || stopLightweight.isPending}
-            allowBusyClick={Boolean(activeLightweightAction)}
+            activeAction={activeLightweightMetadataAction}
+            buttonLabel={metadataButtonLabel}
+            busyLabel={metadataBusyLabel}
+            disabled={(!lightweightReady && !activeLightweightMetadataAction) || stopLightweight.isPending || Boolean(activeLightweightScoringAction)}
+            allowBusyClick={Boolean(activeLightweightMetadataAction)}
             icon={<Sparkles className="h-5 w-5" />}
-            loading={lightweightLoading}
-            onClick={handleLightweightAction}
-            subtitle={lightweightSubtitle}
-            title="Lightweight enrich"
-            tone={lightweightPendingCount === 0 ? "success" : "error"}
+            loading={metadataLoading}
+            onClick={handleMetadataAction}
+            subtitle={metadataSubtitle}
+            title="Enrichment"
+            tone={lightweightMetadataPendingCount === 0 ? "success" : "error"}
           >
-            <InlineActionProgress action={activeLightweightAction} runs={runs} status={status} />
+            <InlineActionProgress action={activeLightweightMetadataAction} runs={runs} status={status} />
+          </ActionCard>
+          <ActionCard
+            activeAction={activeLightweightScoringAction}
+            buttonLabel={scoringButtonLabel}
+            busyLabel={scoringBusyLabel}
+            disabled={(!lightweightReady && !activeLightweightScoringAction) || stopLightweight.isPending || Boolean(activeLightweightMetadataAction)}
+            allowBusyClick={Boolean(activeLightweightScoringAction)}
+            icon={<Sparkles className="h-5 w-5" />}
+            loading={scoringLoading}
+            onClick={handleScoringAction}
+            subtitle={scoringSubtitle}
+            title="Scoring"
+            tone={lightweightScoringPendingCount === 0 ? "success" : "error"}
+          >
+            <InlineActionProgress action={activeLightweightScoringAction} runs={runs} status={status} />
           </ActionCard>
           <ActionCard
             activeAction={activeIndexAction}
@@ -2844,12 +3033,12 @@ function PipelineTabContent({
               busyLabel={regenerateBusyLabel}
               buttonLabel="Regenerate"
               disabled={regenerateLoading || !activeBriefDate}
+              inputDisabled={regenerateLoading}
               loading={regenerateLoading}
-              onChange={setSelectedBriefDate}
+              onBlur={briefDateInput.onBlur}
+              onChange={briefDateInput.onChange}
               onClick={runRegenerateBrief}
-              options={editionOptions}
-              selectDisabled={regenerateLoading}
-              value={selectedBriefDate}
+              value={briefDateInput.value}
             />
             <InlineActionProgress action={activeRegenerateAction} runs={runs} status={status} />
           </ActionCard>
@@ -2869,12 +3058,12 @@ function PipelineTabContent({
               busyLabel={audioBusyLabel}
               buttonLabel="Generate"
               disabled={audioLoading || !activeBriefDate}
+              inputDisabled={audioLoading}
               loading={audioLoading}
-              onChange={setSelectedBriefDate}
+              onBlur={briefDateInput.onBlur}
+              onChange={briefDateInput.onChange}
               onClick={runGenerateAudio}
-              options={editionOptions}
-              selectDisabled={audioLoading}
-              value={selectedBriefDate}
+              value={briefDateInput.value}
             />
             <InlineActionProgress action={activeAudioAction} runs={runs} status={status} />
           </ActionCard>
@@ -2894,12 +3083,12 @@ function PipelineTabContent({
               busyLabel={publishBusyLabel}
               buttonLabel="Publish"
               disabled={publishLoading || !activeBriefDate}
+              inputDisabled={publishLoading}
               loading={publishLoading}
-              onChange={setSelectedBriefDate}
+              onBlur={briefDateInput.onBlur}
+              onChange={briefDateInput.onChange}
               onClick={runPublishViewer}
-              options={editionOptions}
-              selectDisabled={publishLoading}
-              value={selectedBriefDate}
+              value={briefDateInput.value}
             />
             <InlineActionProgress action={activePublishAction} runs={runs} status={status} />
           </ActionCard>
@@ -3092,6 +3281,27 @@ function PipelineTabContent({
                                 Default {source.max_items} from source settings. Raise this for deeper backfills without changing the saved source config.
                               </span>
                             </label>
+                            {isAlphaXivSource(source) ? (
+                              <div className="rounded-[1.2rem] border border-[var(--ink)]/8 bg-[rgba(255,255,255,0.62)] px-3 py-3">
+                                <span className="field-label">alphaXiv sort override</span>
+                                <label className="mt-2 flex items-start gap-3 text-sm leading-6 text-[var(--muted-strong)]">
+                                  <input
+                                    checked={sourceFetchUsesAlphaXivLikes(source)}
+                                    className="mt-1 h-4 w-4"
+                                    onChange={(event) =>
+                                      handleSourceFetchAlphaXivLikesChange(source.id, event.target.checked)
+                                    }
+                                    type="checkbox"
+                                  />
+                                  <span>
+                                    Force Likes for this fetch
+                                    <span className="mt-1 block text-xs leading-5 text-[var(--muted)]">
+                                      Unchecked keeps the current profile alphaXiv sort. Checked overrides this run to Likes so the fetch surfaces the platform&apos;s most-liked papers.
+                                    </span>
+                                  </span>
+                                </label>
+                              </div>
+                            ) : null}
                             <button className="secondary-button w-full justify-center" onClick={() => handleSourceFetch(source)} type="button">
                               Fetch source
                             </button>
@@ -3782,6 +3992,7 @@ export function LocalControlApp({ config: _config }: { config: RuntimeConfig }) 
             <Route element={<LocalDashboardLayout />}>
               <Route element={<Navigate replace to="/overview" />} index />
               <Route element={<OverviewTab />} path="overview" />
+              <Route element={<LocalControlBriefTab />} path="brief" />
               <Route element={<InsightsTab />} path="insights" />
               <Route element={<LocalControlDocumentsTab />} path="documents" />
               <Route element={<LocalControlDocumentDetailPage />} path="documents/:itemId" />

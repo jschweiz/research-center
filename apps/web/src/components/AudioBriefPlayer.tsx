@@ -1,6 +1,7 @@
 import type { ChangeEvent } from "react";
 import { useEffect, useId, useRef, useState } from "react";
 import { FileText, LoaderCircle, Pause, Play } from "lucide-react";
+import clsx from "clsx";
 
 import { api } from "../api/client";
 import type { AudioBrief } from "../api/types";
@@ -28,12 +29,27 @@ async function readAudioError(response: Response) {
   return text;
 }
 
+function audioUnavailableMessage() {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    return "Audio is unavailable offline right now. Reconnect and try again.";
+  }
+  return "The audio endpoint could not be reached.";
+}
+
 export function AudioBriefPlayer({
   briefDate,
   audioBrief,
+  audioUrl,
+  audioRequestInit,
+  mode = "default",
+  showChapters = false,
 }: {
   briefDate: string;
   audioBrief: AudioBrief;
+  audioUrl?: string | null;
+  audioRequestInit?: RequestInit;
+  mode?: "default" | "published";
+  showChapters?: boolean;
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
@@ -50,6 +66,9 @@ export function AudioBriefPlayer({
 
   const totalDuration = duration || audioBrief.audio_duration_seconds || audioBrief.estimated_duration_seconds || 0;
   const transcript = audioBrief.script?.trim() ?? "";
+  const chapters = [...audioBrief.chapters]
+    .filter((chapter) => Number.isFinite(chapter.offset_seconds))
+    .sort((left, right) => left.offset_seconds - right.offset_seconds);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -138,13 +157,15 @@ export function AudioBriefPlayer({
     setIsLoading(true);
     setLoadError(null);
     try {
-      const audioUrl = audioBrief.audio_url ?? api.getAudioSummaryUrl(briefDate);
-      const requestInit = audioBrief.audio_url
-        ? undefined
-        : {
-            credentials: "include" as const,
-          };
-      const response = await fetch(audioUrl, requestInit);
+      const resolvedAudioUrl = audioUrl ?? audioBrief.audio_url ?? api.getAudioSummaryUrl(briefDate);
+      const requestInit =
+        audioUrl || audioBrief.audio_url
+          ? audioRequestInit
+          : {
+              ...audioRequestInit,
+              credentials: audioRequestInit?.credentials ?? "include",
+            };
+      const response = await fetch(resolvedAudioUrl, requestInit);
       if (!response.ok) {
         const message = await readAudioError(response);
         throw new Error(message || "Audio brief could not be loaded.");
@@ -158,7 +179,7 @@ export function AudioBriefPlayer({
     } catch (error) {
       const message =
         error instanceof TypeError && error.message === "Failed to fetch"
-          ? "The audio endpoint could not be reached."
+          ? audioUnavailableMessage()
           : error instanceof Error
             ? error.message
             : "Audio brief could not be loaded.";
@@ -181,6 +202,18 @@ export function AudioBriefPlayer({
     audio.pause();
   };
 
+  const seekToChapter = async (offsetSeconds: number) => {
+    const audio = audioRef.current;
+    if (!audio || audioBrief.status !== "succeeded") return;
+    const source = await ensureAudioLoaded();
+    if (audio.src !== source) audio.src = source;
+    audio.currentTime = offsetSeconds;
+    setCurrentTime(offsetSeconds);
+    if (audio.paused) {
+      await audio.play();
+    }
+  };
+
   const handleSeek = (event: ChangeEvent<HTMLInputElement>) => {
     const nextTime = Number(event.target.value);
     setCurrentTime(nextTime);
@@ -191,92 +224,125 @@ export function AudioBriefPlayer({
 
   if (audioBrief.status !== "succeeded") {
     return (
-      <div className="rounded-full border border-[var(--ink)]/8 bg-[rgba(255,255,255,0.56)] px-4 py-3 text-sm text-[var(--muted)]">
+      <div className={clsx("audio-brief-unavailable", mode === "published" && "audio-brief-unavailable-published")}>
         {audioBrief.error ?? "Generate the voice summary to create a playable audio brief."}
       </div>
     );
   }
 
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
-            Audio summary {audioBrief.provider ? ` / ${audioBrief.provider}` : ""} {audioBrief.voice ? ` / ${audioBrief.voice}` : ""}
+    <div className={clsx("audio-brief-player", mode === "published" && "audio-brief-player-published")}>
+      <div className="audio-brief-meta-row">
+        <div className="audio-brief-copy">
+          <p className="audio-brief-eyebrow">
+            Audio brief
+            {audioBrief.provider ? ` / ${audioBrief.provider}` : ""}
+            {audioBrief.voice ? ` / ${audioBrief.voice}` : ""}
+          </p>
+          <p className="audio-brief-helper">
+            {showChapters && chapters.length
+              ? `${chapters.length} chapter markers. Jump directly to the story you want.`
+              : "Listen from the top or scrub through the narrated edition."}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {transcript ? (
-            <div
-              className="relative"
-              onBlur={(event) => {
-                const nextTarget = event.relatedTarget;
-                if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
-                setIsTranscriptOpen(false);
-              }}
-            >
-              <button
-                aria-controls={transcriptId}
-                aria-expanded={isTranscriptOpen}
-                aria-haspopup="dialog"
-                className="inline-flex items-center gap-2 rounded-full border border-[var(--ink)]/10 bg-[rgba(255,255,255,0.7)] px-3 py-1.5 text-[var(--muted)] transition hover:-translate-y-0.5 hover:border-[var(--accent)]/26 hover:text-[var(--accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/18"
-                onClick={() => setIsTranscriptOpen((open) => !open)}
-                ref={transcriptButtonRef}
-                type="button"
-              >
-                <FileText className="h-3.5 w-3.5 shrink-0" />
-                <span className="font-mono text-[11px] uppercase tracking-[0.18em]">Transcript</span>
-              </button>
 
-              {isTranscriptOpen ? (
-                <div
-                  aria-label="Audio transcript"
-                  className="absolute right-0 top-[calc(100%+0.65rem)] z-20 w-80 max-w-[calc(100vw-2.5rem)] rounded-[1.35rem] border border-[var(--ink)]/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(247,240,224,0.92))] p-4 shadow-[0_24px_64px_rgba(17,19,18,0.16)] backdrop-blur-md"
-                  id={transcriptId}
-                  ref={transcriptPanelRef}
-                >
-                  <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--muted)]">
-                    Transcript
-                  </p>
-                  <p className="mt-2 max-h-72 overflow-y-auto pr-2 text-sm leading-6 whitespace-pre-line text-[var(--muted-strong)]">
-                    {transcript}
-                  </p>
-                </div>
-              ) : null}
-            </div>
+        <div className="audio-brief-meta-actions">
+          {transcript ? (
+            <button
+              aria-controls={transcriptId}
+              aria-expanded={isTranscriptOpen}
+              aria-haspopup="dialog"
+              className="audio-transcript-toggle"
+              onClick={() => setIsTranscriptOpen((open) => !open)}
+              ref={transcriptButtonRef}
+              type="button"
+            >
+              <FileText className="h-3.5 w-3.5 shrink-0" />
+              <span>Transcript</span>
+            </button>
           ) : null}
 
-          <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
+          <p className="audio-brief-clock">
             {formatClock(currentTime)} / {formatClock(totalDuration)}
           </p>
         </div>
       </div>
 
-      <div className="flex items-center gap-3 rounded-full border border-[var(--ink)]/8 bg-[rgba(255,255,255,0.62)] px-3 py-3">
+      <div className="audio-brief-control-row">
         <button
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--ink)] text-[var(--paper)] transition hover:translate-y-[-1px] hover:shadow-[0_10px_24px_rgba(17,19,18,0.14)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none"
+          className={clsx("audio-brief-play-button", isPlaying && "audio-brief-play-button-active")}
           disabled={isLoading}
           onClick={() => {
             void togglePlayback();
           }}
           type="button"
         >
-          {isLoading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+          {isLoading ? <LoaderCircle className="h-5 w-5 animate-spin" /> : isPlaying ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
         </button>
 
-        <input
-          aria-label="Audio progress"
-          className="audio-progress min-w-0 flex-1"
-          max={Math.max(totalDuration, 0.1)}
-          min={0}
-          onChange={handleSeek}
-          step={0.1}
-          type="range"
-          value={Math.min(currentTime, totalDuration || 0)}
-        />
+        <div className="audio-brief-progress-stack">
+          <input
+            aria-label="Audio progress"
+            className="audio-progress min-w-0 flex-1"
+            max={Math.max(totalDuration, 0.1)}
+            min={0}
+            onChange={handleSeek}
+            step={0.1}
+            type="range"
+            value={Math.min(currentTime, totalDuration || 0)}
+          />
+          <div className="audio-brief-progress-meta">
+            <span>{isPlaying ? "Now listening" : "Tap play to begin"}</span>
+            <span>{chapters.length ? `${chapters.length} chapters` : "Narrated edition"}</span>
+          </div>
+        </div>
       </div>
 
-      {loadError ? <p className="text-sm text-[var(--danger)]">{loadError}</p> : null}
+      {loadError ? <p className="audio-brief-error">{loadError}</p> : null}
+
+      {showChapters && chapters.length ? (
+        <div className="audio-brief-chapter-list">
+          {chapters.map((chapter) => (
+            <button
+              className="audio-brief-chapter"
+              key={`${chapter.item_id}-${chapter.offset_seconds}`}
+              onClick={() => {
+                void seekToChapter(chapter.offset_seconds);
+              }}
+              type="button"
+            >
+              <span className="audio-brief-chapter-time">{formatClock(chapter.offset_seconds)}</span>
+              <span className="audio-brief-chapter-copy">
+                <span className="audio-brief-chapter-section">{chapter.section}</span>
+                <span className="audio-brief-chapter-title">{chapter.headline || chapter.item_title}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {isTranscriptOpen ? (
+        <>
+          <button
+            aria-label="Close transcript"
+            className="audio-transcript-backdrop"
+            onClick={() => setIsTranscriptOpen(false)}
+            type="button"
+          />
+          <div aria-label="Audio transcript" className="audio-transcript-panel" id={transcriptId} ref={transcriptPanelRef} role="dialog">
+            <div className="audio-transcript-header">
+              <div>
+                <p className="audio-brief-eyebrow">Transcript</p>
+                <h4 className="audio-transcript-title">Read along with the brief</h4>
+              </div>
+              <button className="ghost-button" onClick={() => setIsTranscriptOpen(false)} type="button">
+                Close
+              </button>
+            </div>
+            <p className="audio-transcript-body">{transcript}</p>
+          </div>
+        </>
+      ) : null}
 
       <audio ref={audioRef} preload="metadata" />
     </div>

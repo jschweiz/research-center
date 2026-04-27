@@ -4,13 +4,11 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "react-router-dom";
 
 import { configureApiClient } from "./api/client";
-import { HostedViewerApp } from "./hosted/HostedViewerApp";
 import { queryClient } from "./lib/query-client";
-import { LocalControlApp } from "./local-control/LocalControlApp";
-import { router } from "./routes/router";
 import { loadRuntimeConfig } from "./runtime/config";
 import type { RuntimeConfig } from "./runtime/types";
 import "./styles/index.css";
+import "./styles/published-viewer.css";
 
 const rootElement = document.getElementById("root");
 
@@ -20,15 +18,23 @@ if (!rootElement) {
 
 const root = ReactDOM.createRoot(rootElement);
 
-function renderApp(config: RuntimeConfig) {
+async function renderApp(config: RuntimeConfig) {
+  if (__PUBLISHED_ONLY__) {
+    const { HostedViewerApp } = await import("./hosted/HostedViewerApp");
+    return <HostedViewerApp config={config} />;
+  }
+
   if (config.mode === "hosted") {
+    const { HostedViewerApp } = await import("./hosted/HostedViewerApp");
     return <HostedViewerApp config={config} />;
   }
 
   if (config.mode === "local") {
+    const { LocalControlApp } = await import("./local-control/LocalControlApp");
     return <LocalControlApp config={config} />;
   }
 
+  const { router } = await import("./routes/router");
   return (
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -39,11 +45,12 @@ function renderApp(config: RuntimeConfig) {
 async function bootstrap() {
   const config = await loadRuntimeConfig();
 
-  if (config.mode !== "hosted") {
+  if (!__PUBLISHED_ONLY__ && config.mode !== "hosted") {
     configureApiClient(config.apiBaseUrl ?? "/api");
   }
 
-  root.render(<React.StrictMode>{renderApp(config)}</React.StrictMode>);
+  const app = await renderApp(config);
+  root.render(<React.StrictMode>{app}</React.StrictMode>);
 }
 
 void bootstrap().catch((error) => {

@@ -7,6 +7,7 @@ import { api } from "../../api/client";
 import type { IngestionRunHistoryEntry, RunStatus, Source, SourceProbeResult, SourceRawKind, SourceType } from "../../api/types";
 import { SkimmableText } from "../../components/SkimmableText";
 import defaultZoteroAutoTagVocabulary from "../../constants/zoteroAutoTagVocabulary.json";
+import { useDefaultedDateInput } from "../../lib/use-defaulted-date-input";
 
 const DEFAULT_ZOTERO_AUTO_TAG_VOCABULARY = defaultZoteroAutoTagVocabulary as string[];
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -551,11 +552,6 @@ function formatBriefDayLabel(value: string) {
   }).format(new Date(`${value}T12:00:00`));
 }
 
-function formatEditionTargetLabel(value: string) {
-  const [year, month, day] = value.split("-");
-  return `${Number(day)}/${month}/${year}`;
-}
-
 export function ConnectionsPage() {
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -589,7 +585,6 @@ export function ConnectionsPage() {
   const [injectingSourceId, setInjectingSourceId] = useState<string | null>(null);
   const [loadingLatestLogSourceId, setLoadingLatestLogSourceId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [regenerateBriefDate, setRegenerateBriefDate] = useState("");
   const [gmailEmail, setGmailEmail] = useState("");
   const [gmailAppPassword, setGmailAppPassword] = useState("");
   const [zoteroApiKey, setZoteroApiKey] = useState("");
@@ -821,19 +816,11 @@ export function ConnectionsPage() {
     || regenerateEdition.isPending
     || clearContent.isPending;
 
-  const regenerateOptions = useMemo(() => {
-    if (briefAvailabilityQuery.data?.days.length) return briefAvailabilityQuery.data.days;
-    if (briefAvailabilityQuery.data?.default_day) {
-      return [
-        {
-          brief_date: briefAvailabilityQuery.data.default_day,
-          coverage_start: briefAvailabilityQuery.data.default_day,
-          coverage_end: briefAvailabilityQuery.data.default_day,
-        },
-      ];
-    }
-    return [];
-  }, [briefAvailabilityQuery.data]);
+  const defaultRegenerateBriefDate =
+    briefAvailabilityQuery.data?.default_day
+    ?? briefAvailabilityQuery.data?.days.at(-1)?.brief_date
+    ?? "";
+  const regenerateBriefDateInput = useDefaultedDateInput(defaultRegenerateBriefDate);
 
   const gmailNotice =
     saveGmail.isError
@@ -883,12 +870,6 @@ export function ConnectionsPage() {
     }
     setZoteroAutoTagVocabularyHydrated(true);
   }, [zoteroAutoTagVocabularyHydrated, zoteroQuery.data, zoteroQuery.isPending]);
-
-  useEffect(() => {
-    if (!regenerateOptions.length) return;
-    if (regenerateOptions.some((option) => option.brief_date === regenerateBriefDate)) return;
-    setRegenerateBriefDate(regenerateOptions[0].brief_date);
-  }, [regenerateBriefDate, regenerateOptions]);
 
   useEffect(() => {
     if (connectionPanelsReady || gmailQuery.isPending || zoteroQuery.isPending) return;
@@ -2124,23 +2105,23 @@ export function ConnectionsPage() {
           <div className="mt-5 grid gap-3 border-t border-[var(--ink)]/8 pt-5 lg:grid-cols-[minmax(0,280px)_auto] lg:items-end">
             <label>
               <span className="field-label">Regenerate edition</span>
-              <select
+              <input
+                aria-label="Regenerate edition date"
                 className="field-input mt-2"
-                disabled={!regenerateOptions.length || regenerateEdition.isPending || clearContent.isPending}
-                onChange={(event) => setRegenerateBriefDate(event.target.value)}
-                value={regenerateBriefDate}
-              >
-                {regenerateOptions.map((option) => (
-                  <option key={option.brief_date} value={option.brief_date}>
-                    {formatEditionTargetLabel(option.brief_date)}
-                  </option>
-                ))}
-              </select>
+                disabled={regenerateEdition.isPending || clearContent.isPending}
+                onBlur={regenerateBriefDateInput.onBlur}
+                onChange={(event) => regenerateBriefDateInput.onChange(event.target.value)}
+                type="date"
+                value={regenerateBriefDateInput.value}
+              />
+              <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+                Choose any single day to rebuild from the current index.
+              </p>
             </label>
             <button
               className="secondary-button w-fit"
-              disabled={!regenerateBriefDate || operationActionBusy}
-              onClick={() => regenerateEdition.mutate(regenerateBriefDate)}
+              disabled={!regenerateBriefDateInput.value || operationActionBusy}
+              onClick={() => regenerateEdition.mutate(regenerateBriefDateInput.value)}
               type="button"
             >
               {regenerateEdition.isPending ? "Regenerating edition..." : "Regenerate selected edition"}
